@@ -85,7 +85,7 @@ All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,acce
 | `GET` | `/browse?prefix=&marker=` | cookie | List current prefix (`Delimiter=/`, 200 keys per page) |
 | `GET` | `/download?key=` | cookie | Sign a 5-minute GET URL and 302 to OSS |
 | `GET` | `/upload` | cookie | Local workspace page (EventSource `/upload/events`) |
-| `GET` | `/upload/events` | cookie | SSE: `snapshot`, `lock`, `files`, `state`, `progress`, `done`, `error` |
+| `GET` | `/upload/events` | cookie | SSE: `snapshot`, `lock`, `files`, `state`, `progress`, `done`, `error`; lagging subscribers are dropped so EventSource reconnects to a fresh snapshot |
 | `GET` | `/upload/files` | cookie | JSON list of regular files in the workspace |
 | `POST` | `/upload/files` | cookie | Multipart field `file` (one or more); writes into the workspace (409 if locked) |
 | `DELETE` | `/upload/files?name=` | cookie | Delete one workspace file (409 if locked) |

@@ -74,6 +74,9 @@ func (s *Server) acquire(kind string) bool {
 		return false
 	}
 	s.hub.lock = kind
+	// A new operation supersedes the last job's result and its throttle state.
+	s.hub.job = nil
+	s.hub.lastProg = time.Time{}
 	s.hub.mu.Unlock()
 	s.hub.broadcast(eventLock, map[string]string{"lock": kind})
 	return true
@@ -124,6 +127,10 @@ func (h *eventHub) unsubscribe(ch chan sseEvent) {
 	h.mu.Unlock()
 }
 
+// broadcast fans an event out to all subscribers. A subscriber whose buffer
+// is full is evicted (channel closed); its handler then ends the response and
+// the browser's EventSource reconnects to a fresh snapshot, so slow clients
+// self-heal instead of silently missing lock/done/error events.
 func (h *eventHub) broadcast(name string, data any) {
 	ev := sseEvent{Name: name, Data: data}
 	h.mu.Lock()
@@ -132,6 +139,8 @@ func (h *eventHub) broadcast(name string, data any) {
 		select {
 		case ch <- ev:
 		default:
+			delete(h.subs, ch)
+			close(ch)
 		}
 	}
 }
@@ -168,16 +177,22 @@ func (s *Server) emitFail(p jobProgress) {
 	s.hub.broadcast(eventError, p)
 }
 
-func (s *Server) emitFiles() {
+// workspaceFiles lists the staging dir, degrading to an empty slice (with a
+// log line) when the dir cannot be read.
+func (s *Server) workspaceFiles() []workspaceFile {
 	files, err := listWorkspaceFiles(s.workspaceDir())
 	if err != nil {
 		log.Println("list workspace:", err)
-		return
+		return []workspaceFile{}
 	}
 	if files == nil {
 		files = []workspaceFile{}
 	}
-	s.hub.broadcast(eventFiles, map[string]any{"files": files})
+	return files
+}
+
+func (s *Server) emitFiles() {
+	s.hub.broadcast(eventFiles, map[string]any{"files": s.workspaceFiles()})
 }
 
 func (s *Server) emitState() {
@@ -185,21 +200,13 @@ func (s *Server) emitState() {
 }
 
 func (s *Server) snapshot() eventsSnapshot {
-	files, err := listWorkspaceFiles(s.workspaceDir())
-	if err != nil {
-		log.Println("list workspace:", err)
-		files = []workspaceFile{}
-	}
-	if files == nil {
-		files = []workspaceFile{}
+	snap := eventsSnapshot{
+		Files: s.workspaceFiles(),
+		State: loadWorkspaceState(s.workspaceDir()),
 	}
 	s.hub.mu.Lock()
 	defer s.hub.mu.Unlock()
-	snap := eventsSnapshot{
-		Lock:  s.hub.lock,
-		Files: files,
-		State: loadWorkspaceState(s.workspaceDir()),
-	}
+	snap.Lock = s.hub.lock
 	if s.hub.job != nil {
 		job := *s.hub.job
 		snap.Job = &job
@@ -242,7 +249,12 @@ func (s *Server) handleUploadEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case ev := <-ch:
+		case ev, ok := <-ch:
+			if !ok {
+				// Evicted by broadcast for falling behind; ending the
+				// response lets EventSource reconnect to a fresh snapshot.
+				return
+			}
 			if err := writeSSE(w, ev.Name, ev.Data); err != nil {
 				return
 			}

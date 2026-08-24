@@ -304,6 +304,8 @@
           if (lock) renderJob(data.job);
           else if (data.job.error) renderJob(data.job);
           else renderDone(data.job);
+        } else if (lock === 'stage') {
+          renderJob(null);
         } else {
           applyLock();
         }

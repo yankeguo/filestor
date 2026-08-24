@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -21,30 +20,6 @@ const (
 )
 
 var errInvalidPushTitle = errors.New("invalid title")
-
-// pushState is the JSON-visible snapshot of a push job.
-type pushState struct {
-	Running    bool   `json:"running"`
-	Prefix     string `json:"prefix"`
-	Total      int    `json:"total"`
-	Done       int    `json:"done"`
-	TotalBytes int64  `json:"total_bytes"`
-	DoneBytes  int64  `json:"done_bytes"`
-	Current    string `json:"current"`
-	Error      string `json:"error"`
-}
-
-type pushJob struct {
-	mu sync.Mutex
-	st pushState
-}
-
-func (j *pushJob) update(fn func(*pushState)) pushState {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	fn(&j.st)
-	return j.st
-}
 
 // progressReader reports every read to on, driving DoneBytes.
 type progressReader struct {
@@ -135,75 +110,59 @@ func (s *Server) handleUploadPush(w http.ResponseWriter, r *http.Request) {
 	for _, f := range files {
 		names = append(names, f.Name)
 	}
-	job := &pushJob{}
-	job.st = pushState{Running: true, Prefix: prefix + "/", Total: len(names)}
-	s.emitProgress(jobFromPush(job.st), false)
+	job := jobProgress{Kind: lockPush, Prefix: prefix + "/", Total: len(names)}
+	s.emitProgress(job, false)
 	go s.runPush(job, dir, prefix, names)
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "prefix": prefix + "/"})
 }
 
-func jobFromPush(st pushState) jobProgress {
-	return jobProgress{
-		Kind:       lockPush,
-		File:       st.Current,
-		Done:       st.Done,
-		Total:      st.Total,
-		DoneBytes:  st.DoneBytes,
-		TotalBytes: st.TotalBytes,
-		Prefix:     st.Prefix,
-		Error:      st.Error,
-	}
-}
-
 // runPush uploads every staged file to OSS under prefix, removing each file
 // from the workspace once it lands. The first failure stops the job and keeps
-// the remaining files staged.
-func (s *Server) runPush(job *pushJob, dir, prefix string, names []string) {
+// the remaining files staged. job is owned by this goroutine alone (the
+// progressReader callback runs inside store.Put on the same goroutine), so it
+// needs no locking.
+func (s *Server) runPush(job jobProgress, dir, prefix string, names []string) {
 	defer s.release(lockPush)
 	log.Printf("push started: %s (%d files)", prefix, len(names))
-	sizes := make([]int64, len(names))
-	var totalBytes int64
-	for i, name := range names {
+	for _, name := range names {
 		if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			sizes[i] = info.Size()
-			totalBytes += info.Size()
+			job.TotalBytes += info.Size()
 		}
 	}
-	s.emitProgress(jobFromPush(job.update(func(st *pushState) { st.TotalBytes = totalBytes })), false)
+	s.emitProgress(job, false)
 	for _, name := range names {
-		s.emitProgress(jobFromPush(job.update(func(st *pushState) { st.Current = name })), false)
-		if err := s.pushOne(job, filepath.Join(dir, name), prefix+"/"+name); err != nil {
+		job.File = name
+		s.emitProgress(job, false)
+		if err := s.pushOne(&job, filepath.Join(dir, name), prefix+"/"+name); err != nil {
 			log.Println("push:", err)
-			st := job.update(func(st *pushState) {
-				st.Running = false
-				st.Error = fmt.Sprintf("%s: %v", name, err)
-			})
-			s.emitFail(jobFromPush(st))
+			job.Error = fmt.Sprintf("%s: %v", name, err)
+			s.emitFail(job)
 			s.emitFiles()
 			return
 		}
-		_ = os.Remove(filepath.Join(dir, name))
-		s.emitProgress(jobFromPush(job.update(func(st *pushState) { st.Done++ })), false)
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			log.Println("remove staged file:", err)
+		}
+		job.Done++
+		s.emitProgress(job, false)
 		s.emitFiles()
 	}
 	clearWorkspaceStateIfEmpty(dir)
-	st := job.update(func(st *pushState) {
-		st.Running = false
-		st.Current = ""
-	})
-	s.emitDone(jobFromPush(st))
+	job.File = ""
+	s.emitDone(job)
 	s.emitState()
 	log.Printf("push finished: %s", prefix)
 }
 
-func (s *Server) pushOne(job *pushJob, localPath, key string) error {
+func (s *Server) pushOne(job *jobProgress, localPath, key string) error {
 	f, err := os.Open(localPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	pr := &progressReader{r: f, on: func(n int64) {
-		s.emitProgress(jobFromPush(job.update(func(st *pushState) { st.DoneBytes += n })), true)
+		job.DoneBytes += n
+		s.emitProgress(*job, true)
 	}}
 	return s.store.Put(key, pr)
 }

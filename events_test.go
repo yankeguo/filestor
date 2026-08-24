@@ -49,6 +49,37 @@ func readSSEEvent(t *testing.T, r *bufio.Reader) (name, data string) {
 	}
 }
 
+func TestBroadcastEvictsSlowSubscriber(t *testing.T) {
+	h := newEventHub()
+	ch := h.subscribe()
+	for i := 0; i < eventsChanSize; i++ {
+		h.broadcast(eventProgress, jobProgress{})
+	}
+	require.Len(t, ch, eventsChanSize)
+
+	// One more event than the buffer holds: the lagging subscriber is
+	// evicted so its EventSource reconnects to a fresh snapshot instead of
+	// silently missing events.
+	h.broadcast(eventProgress, jobProgress{})
+	require.Empty(t, h.subs)
+	for i := 0; i < eventsChanSize; i++ {
+		_, ok := <-ch
+		require.True(t, ok)
+	}
+	_, ok := <-ch
+	require.False(t, ok, "evicted subscriber channel must be closed")
+}
+
+func TestAcquireClearsLastJob(t *testing.T) {
+	srv := NewServer(cfgWithWorkspace(t), &fakeStore{})
+	srv.emitDone(jobProgress{Kind: lockPush, Prefix: "2026/08/x/"})
+	require.NotEmpty(t, srv.lastJob().Prefix)
+
+	require.True(t, srv.acquire(lockStage))
+	defer srv.release(lockStage)
+	require.Equal(t, jobProgress{}, srv.lastJob())
+}
+
 func TestUploadEventsRequiresLogin(t *testing.T) {
 	h := NewServer(cfgWithWorkspace(t), &fakeStore{}).Handler()
 	req := httptest.NewRequest(http.MethodGet, "/upload/events", nil)
