@@ -225,6 +225,11 @@ func (s *Server) handleUploadList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUploadAdd(w http.ResponseWriter, r *http.Request) {
+	if !s.acquire(lockStage) {
+		workspaceBusy(w)
+		return
+	}
+	defer s.release(lockStage)
 	r.Body = http.MaxBytesReader(w, r.Body, uploadMaxBytes)
 	if err := r.ParseMultipartForm(uploadMaxMemory); err != nil {
 		var maxErr *http.MaxBytesError
@@ -267,6 +272,8 @@ func (s *Server) handleUploadAdd(w http.ResponseWriter, r *http.Request) {
 		// Pin as soon as the first file lands, even if a later part fails.
 		pinWorkspaceState(dir)
 	}
+	s.emitFiles()
+	s.emitState()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -276,6 +283,11 @@ func (s *Server) handleUploadDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid file name", http.StatusBadRequest)
 		return
 	}
+	if !s.acquire(lockStage) {
+		workspaceBusy(w)
+		return
+	}
+	defer s.release(lockStage)
 	dir := s.workspaceDir()
 	if err := removeWorkspaceFile(dir, name); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -287,11 +299,17 @@ func (s *Server) handleUploadDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clearWorkspaceStateIfEmpty(dir)
+	s.emitFiles()
+	s.emitState()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // handleUploadState persists the draft push time/title while files are staged.
 func (s *Server) handleUploadState(w http.ResponseWriter, r *http.Request) {
+	if s.busyForState() {
+		workspaceBusy(w)
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
@@ -319,6 +337,7 @@ func (s *Server) handleUploadState(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "save failed", http.StatusInternalServerError)
 			return
 		}
+		s.emitState()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

@@ -39,16 +39,11 @@ type pushJob struct {
 	st pushState
 }
 
-func (j *pushJob) snapshot() pushState {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return j.st
-}
-
-func (j *pushJob) update(fn func(*pushState)) {
+func (j *pushJob) update(fn func(*pushState)) pushState {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	fn(&j.st)
+	return j.st
 }
 
 // progressReader reports every read to on, driving DoneBytes.
@@ -132,39 +127,39 @@ func (s *Server) handleUploadPush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no staged files", http.StatusBadRequest)
 		return
 	}
+	if !s.acquire(lockPush) {
+		workspaceBusy(w)
+		return
+	}
 	names := make([]string, 0, len(files))
 	for _, f := range files {
 		names = append(names, f.Name)
 	}
-	s.pushMu.Lock()
-	if s.push != nil && s.push.snapshot().Running {
-		s.pushMu.Unlock()
-		http.Error(w, "upload already running", http.StatusConflict)
-		return
-	}
 	job := &pushJob{}
 	job.st = pushState{Running: true, Prefix: prefix + "/", Total: len(names)}
-	s.push = job
-	s.pushMu.Unlock()
+	s.emitProgress(jobFromPush(job.st), false)
 	go s.runPush(job, dir, prefix, names)
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "prefix": prefix + "/"})
 }
 
-func (s *Server) handleUploadPushStatus(w http.ResponseWriter, r *http.Request) {
-	s.pushMu.Lock()
-	job := s.push
-	s.pushMu.Unlock()
-	var st pushState
-	if job != nil {
-		st = job.snapshot()
+func jobFromPush(st pushState) jobProgress {
+	return jobProgress{
+		Kind:       lockPush,
+		File:       st.Current,
+		Done:       st.Done,
+		Total:      st.Total,
+		DoneBytes:  st.DoneBytes,
+		TotalBytes: st.TotalBytes,
+		Prefix:     st.Prefix,
+		Error:      st.Error,
 	}
-	writeJSON(w, http.StatusOK, st)
 }
 
 // runPush uploads every staged file to OSS under prefix, removing each file
 // from the workspace once it lands. The first failure stops the job and keeps
 // the remaining files staged.
 func (s *Server) runPush(job *pushJob, dir, prefix string, names []string) {
+	defer s.release(lockPush)
 	log.Printf("push started: %s (%d files)", prefix, len(names))
 	sizes := make([]int64, len(names))
 	var totalBytes int64
@@ -174,25 +169,30 @@ func (s *Server) runPush(job *pushJob, dir, prefix string, names []string) {
 			totalBytes += info.Size()
 		}
 	}
-	job.update(func(st *pushState) { st.TotalBytes = totalBytes })
+	s.emitProgress(jobFromPush(job.update(func(st *pushState) { st.TotalBytes = totalBytes })), false)
 	for _, name := range names {
-		job.update(func(st *pushState) { st.Current = name })
+		s.emitProgress(jobFromPush(job.update(func(st *pushState) { st.Current = name })), false)
 		if err := s.pushOne(job, filepath.Join(dir, name), prefix+"/"+name); err != nil {
 			log.Println("push:", err)
-			job.update(func(st *pushState) {
+			st := job.update(func(st *pushState) {
 				st.Running = false
 				st.Error = fmt.Sprintf("%s: %v", name, err)
 			})
+			s.emitFail(jobFromPush(st))
+			s.emitFiles()
 			return
 		}
 		_ = os.Remove(filepath.Join(dir, name))
-		job.update(func(st *pushState) { st.Done++ })
+		s.emitProgress(jobFromPush(job.update(func(st *pushState) { st.Done++ })), false)
+		s.emitFiles()
 	}
 	clearWorkspaceStateIfEmpty(dir)
-	job.update(func(st *pushState) {
+	st := job.update(func(st *pushState) {
 		st.Running = false
 		st.Current = ""
 	})
+	s.emitDone(jobFromPush(st))
+	s.emitState()
 	log.Printf("push finished: %s", prefix)
 }
 
@@ -203,7 +203,7 @@ func (s *Server) pushOne(job *pushJob, localPath, key string) error {
 	}
 	defer f.Close()
 	pr := &progressReader{r: f, on: func(n int64) {
-		job.update(func(st *pushState) { st.DoneBytes += n })
+		s.emitProgress(jobFromPush(job.update(func(st *pushState) { st.DoneBytes += n })), true)
 	}}
 	return s.store.Put(key, pr)
 }

@@ -133,11 +133,13 @@ var suggestTools = []chatTool{
 // suggestAgent runs the chat-completions tool loop against the configured
 // OpenAI-compatible endpoint.
 type suggestAgent struct {
-	cfg   LLMConfig
-	dir   string
-	http  *http.Client
-	title string
-	when  string
+	cfg        LLMConfig
+	dir        string
+	http       *http.Client
+	title      string
+	when       string
+	onProgress func(jobProgress)
+	onState    func()
 }
 
 func (s *Server) handleUploadSuggest(w http.ResponseWriter, r *http.Request) {
@@ -156,18 +158,40 @@ func (s *Server) handleUploadSuggest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no staged files", http.StatusBadRequest)
 		return
 	}
+	if !s.acquire(lockSuggest) {
+		workspaceBusy(w)
+		return
+	}
 	ag := &suggestAgent{
 		cfg:  s.Config.LLM,
 		dir:  dir,
 		http: &http.Client{Timeout: suggestHTTPTimeout},
+		onProgress: func(p jobProgress) {
+			p.Kind = lockSuggest
+			s.emitProgress(p, false)
+		},
+		onState: func() {
+			s.emitState()
+		},
 	}
-	title, err := ag.run(r.Context(), files)
-	if err != nil {
-		log.Println("suggest:", err)
-		http.Error(w, "suggest failed", http.StatusBadGateway)
-		return
+	s.emitProgress(jobProgress{Kind: lockSuggest, Message: "starting", Total: suggestMaxRounds}, false)
+	go func() {
+		defer s.release(lockSuggest)
+		title, err := ag.run(context.Background(), files)
+		if err != nil {
+			log.Println("suggest:", err)
+			s.emitFail(jobProgress{Kind: lockSuggest, Error: "suggest failed"})
+			return
+		}
+		s.emitDone(jobProgress{Kind: lockSuggest, Title: title, Time: ag.when})
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+}
+
+func (a *suggestAgent) progress(p jobProgress) {
+	if a.onProgress != nil {
+		a.onProgress(p)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "title": title, "time": ag.when})
 }
 
 func (a *suggestAgent) run(ctx context.Context, files []workspaceFile) (string, error) {
@@ -181,6 +205,11 @@ func (a *suggestAgent) run(ctx context.Context, files []workspaceFile) (string, 
 		{Role: "user", Content: b.String()},
 	}
 	for round := 0; round < suggestMaxRounds; round++ {
+		a.progress(jobProgress{
+			Message: fmt.Sprintf("round %d/%d", round+1, suggestMaxRounds),
+			Done:    round,
+			Total:   suggestMaxRounds,
+		})
 		resp, err := a.chat(ctx, messages)
 		if err != nil {
 			return "", err
@@ -221,6 +250,7 @@ func (a *suggestAgent) runTool(ctx context.Context, tc chatToolCall) []chatMessa
 	if err := unmarshalToolArgs(tc.Function.Arguments, &args); err != nil {
 		return reply("invalid arguments: " + err.Error())
 	}
+	a.progress(jobProgress{Message: tc.Function.Name, File: args.Name})
 	switch tc.Function.Name {
 	case "read_file_as_text":
 		text, err := readWorkspaceText(ctx, a.dir, args.Name)
@@ -251,6 +281,9 @@ func (a *suggestAgent) runTool(ctx context.Context, tc chatToolCall) []chatMessa
 			return reply("error: " + err.Error())
 		}
 		a.title = title
+		if a.onState != nil {
+			a.onState()
+		}
 		return reply("title set")
 	case "set_datetime":
 		when, err := parseSuggestTime(args.Time)
@@ -263,6 +296,9 @@ func (a *suggestAgent) runTool(ctx context.Context, tc chatToolCall) []chatMessa
 			return reply("error: " + err.Error())
 		}
 		a.when = when
+		if a.onState != nil {
+			a.onState()
+		}
 		return reply("datetime set")
 	default:
 		return reply("unknown tool: " + tc.Function.Name)

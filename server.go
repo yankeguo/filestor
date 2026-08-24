@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -15,12 +14,11 @@ type Server struct {
 	Config     *Config
 	store      ObjectStore
 	sessionKey []byte
-	pushMu     sync.Mutex
-	push       *pushJob
+	hub        *eventHub
 }
 
 func NewServer(cfg *Config, store ObjectStore) *Server {
-	s := &Server{Config: cfg, store: store}
+	s := &Server{Config: cfg, store: store, hub: newEventHub()}
 	if cfg != nil {
 		s.sessionKey = sessionCookieKey(cfg.Admin.Username, cfg.Admin.Password)
 	}
@@ -43,7 +41,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /upload/state", s.requireAuth(http.HandlerFunc(s.handleUploadState)))
 	mux.Handle("POST /upload/suggest", s.requireAuth(http.HandlerFunc(s.handleUploadSuggest)))
 	mux.Handle("POST /upload/push", s.requireAuth(http.HandlerFunc(s.handleUploadPush)))
-	mux.Handle("GET /upload/push/status", s.requireAuth(http.HandlerFunc(s.handleUploadPushStatus)))
+	mux.Handle("GET /upload/events", s.requireAuth(http.HandlerFunc(s.handleUploadEvents)))
 	return withSecurityHeaders(mux)
 }
 

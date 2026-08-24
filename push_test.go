@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -70,42 +69,13 @@ func postPush(t *testing.T, h http.Handler, cookie *http.Cookie, when, title str
 	return rec
 }
 
-func getPushStatus(t *testing.T, h http.Handler, cookie *http.Cookie) pushState {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/upload/push/status", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-	var st pushState
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &st))
-	return st
-}
-
-func awaitPushDone(t *testing.T, h http.Handler, cookie *http.Cookie) pushState {
-	t.Helper()
-	var st pushState
-	require.Eventually(t, func() bool {
-		st = getPushStatus(t, h, cookie)
-		return !st.Running
-	}, 5*time.Second, 10*time.Millisecond)
-	return st
-}
-
 func TestUploadPushRequiresLogin(t *testing.T) {
 	h := NewServer(cfgWithWorkspace(t), &fakeStore{}).Handler()
-	for _, tc := range []struct {
-		method, path string
-	}{
-		{http.MethodPost, "/upload/push"},
-		{http.MethodGet, "/upload/push/status"},
-	} {
-		req := httptest.NewRequest(tc.method, tc.path, nil)
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
-		require.Equal(t, http.StatusFound, rec.Code, tc.path)
-		require.Equal(t, "/login", rec.Header().Get("Location"), tc.path)
-	}
+	req := httptest.NewRequest(http.MethodPost, "/upload/push", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusFound, rec.Code)
+	require.Equal(t, "/login", rec.Header().Get("Location"))
 }
 
 func TestUploadPushValidation(t *testing.T) {
@@ -131,13 +101,15 @@ func TestUploadPushSuccess(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "b.txt"), []byte("bb"), 0o644))
 	require.NoError(t, saveWorkspaceState(cfg.Upload.Workspace, workspaceState{Time: "2026-08-24T06:59", Title: "weekly report"}))
 	store := &fakeStore{}
-	h := NewServer(cfg, store).Handler()
+	srv := NewServer(cfg, store)
+	h := srv.Handler()
 	cookie := loginCookie(t, h)
 
 	rec := postPush(t, h, cookie, "2026-08-24T06:59", "weekly report")
 	require.Equal(t, http.StatusAccepted, rec.Code)
 
-	st := awaitPushDone(t, h, cookie)
+	awaitIdle(t, srv)
+	st := srv.lastJob()
 	require.Empty(t, st.Error)
 	require.Equal(t, "2026/08/202608240659-weekly-report/", st.Prefix)
 	require.Equal(t, 2, st.Total)
@@ -166,7 +138,8 @@ func TestUploadPushConflict(t *testing.T) {
 		putBlock: make(chan struct{}),
 		putHook:  func(string) { once.Do(func() { close(entered) }) },
 	}
-	h := NewServer(cfg, store).Handler()
+	srv := NewServer(cfg, store)
+	h := srv.Handler()
 	cookie := loginCookie(t, h)
 
 	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
@@ -176,11 +149,43 @@ func TestUploadPushConflict(t *testing.T) {
 		t.Fatal("push job did not start")
 	}
 	require.Equal(t, http.StatusConflict, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
-	require.True(t, getPushStatus(t, h, cookie).Running)
+	require.Equal(t, lockPush, srv.lockKind())
 
 	close(store.putBlock)
-	st := awaitPushDone(t, h, cookie)
-	require.Empty(t, st.Error)
+	awaitIdle(t, srv)
+	require.Empty(t, srv.lastJob().Error)
+}
+
+func TestWorkspaceLockDuringPush(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("aaa"), 0o644))
+	entered := make(chan struct{})
+	var once sync.Once
+	store := &fakeStore{
+		putBlock: make(chan struct{}),
+		putHook:  func(string) { once.Do(func() { close(entered) }) },
+	}
+	srv := NewServer(cfg, store)
+	h := srv.Handler()
+	cookie := loginCookie(t, h)
+
+	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("push job did not start")
+	}
+
+	require.Equal(t, http.StatusConflict, postUploadFileRec(t, h, cookie, "b.txt").Code)
+	req := httptest.NewRequest(http.MethodDelete, "/upload/files?name=a.txt", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusConflict, rec.Code)
+	require.Equal(t, http.StatusConflict, putUploadState(t, h, cookie, "2026-08-24T06:59", "x").Code)
+
+	close(store.putBlock)
+	awaitIdle(t, srv)
 }
 
 func TestUploadPushKeepsFilesAddedDuringJob(t *testing.T) {
@@ -199,7 +204,8 @@ func TestUploadPushKeepsFilesAddedDuringJob(t *testing.T) {
 			})
 		},
 	}
-	h := NewServer(cfg, store).Handler()
+	srv := NewServer(cfg, store)
+	h := srv.Handler()
 	cookie := loginCookie(t, h)
 
 	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
@@ -209,8 +215,8 @@ func TestUploadPushKeepsFilesAddedDuringJob(t *testing.T) {
 		t.Fatal("push job did not start")
 	}
 	close(store.putBlock)
-	st := awaitPushDone(t, h, cookie)
-	require.Empty(t, st.Error)
+	awaitIdle(t, srv)
+	require.Empty(t, srv.lastJob().Error)
 
 	_, err := os.Stat(filepath.Join(dir, "extra.txt"))
 	require.NoError(t, err)
@@ -221,11 +227,13 @@ func TestUploadPushFailureKeepsFiles(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("aaa"), 0o644))
 	store := &fakeStore{putErr: errors.New("oss down")}
-	h := NewServer(cfg, store).Handler()
+	srv := NewServer(cfg, store)
+	h := srv.Handler()
 	cookie := loginCookie(t, h)
 
 	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
-	st := awaitPushDone(t, h, cookie)
+	awaitIdle(t, srv)
+	st := srv.lastJob()
 	require.Contains(t, st.Error, "a.txt")
 	require.Contains(t, st.Error, "oss down")
 
@@ -236,6 +244,6 @@ func TestUploadPushFailureKeepsFiles(t *testing.T) {
 	// A later push can start over.
 	store.putErr = nil
 	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
-	st = awaitPushDone(t, h, cookie)
-	require.Empty(t, st.Error)
+	awaitIdle(t, srv)
+	require.Empty(t, srv.lastJob().Error)
 }

@@ -36,11 +36,11 @@
           </div>
         </div>
         <p class="text-secondary small mt-2 mb-0">Staged files are uploaded to <code>yyyy/MM/yyyyMMddHHmm-&lt;title&gt;/</code> in the bucket (e.g. <code>2026/08/202608241530-weekly-report/</code>) and removed from staging. The picked time is used as-is, whatever the timezone.</p>
-        <div id="push-box" class="mt-3 d-none">
+        <div id="job-box" class="mt-3 d-none">
           <div class="progress" role="progressbar">
-            <div id="push-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div>
+            <div id="job-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div>
           </div>
-          <p id="push-status" class="small mt-1 mb-0"></p>
+          <p id="job-status" class="small mt-1 mb-0"></p>
         </div>
       </div>
     </div>
@@ -48,17 +48,11 @@
       <div class="card-body text-center py-5">
         <i class="bi bi-cloud-arrow-up d-block mb-2" style="font-size:2rem"></i>
         <p class="mb-2">Drop files here or</p>
-        <label class="btn btn-outline-primary mb-0">
+        <label id="picker-label" class="btn btn-outline-primary mb-0">
           <i class="bi bi-plus-lg"></i> Choose files
           <input id="picker" type="file" multiple hidden>
         </label>
         <p class="text-secondary small mt-3 mb-0">Flat files only — no folders, no hidden files starting with <code>.</code>; max 2 GiB per file.</p>
-        <div id="stage-box" class="mt-3 d-none text-start">
-          <div class="progress" role="progressbar">
-            <div id="stage-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div>
-          </div>
-          <p id="stage-status" class="small text-secondary mt-1 mb-0"></p>
-        </div>
       </div>
     </div>
     <div class="card">
@@ -101,23 +95,21 @@
       var filesEl = document.getElementById('files');
       var drop = document.getElementById('drop');
       var picker = document.getElementById('picker');
+      var pickerLabel = document.getElementById('picker-label');
       var statusEl = document.getElementById('status');
       var pushTime = document.getElementById('push-time');
       var pushTitle = document.getElementById('push-title');
       var suggestBtn = document.getElementById('suggest-btn');
       var pushBtn = document.getElementById('push-btn');
-      var pushBox = document.getElementById('push-box');
-      var pushBar = document.getElementById('push-bar');
-      var pushStatus = document.getElementById('push-status');
-      var stageBox = document.getElementById('stage-box');
-      var stageBar = document.getElementById('stage-bar');
-      var stageStatus = document.getElementById('stage-status');
-      var busy = false;
-      var pushRunning = false;
+      var jobBox = document.getElementById('job-box');
+      var jobBar = document.getElementById('job-bar');
+      var jobStatus = document.getElementById('job-status');
+      var staging = false;
+      var lock = '';
       var stageMax = 2 * 1024 * 1024 * 1024;
       var saveTimer;
 
-      function isBusy() { return busy || pushRunning; }
+      function isBusy() { return staging || !!lock; }
 
       window.addEventListener('beforeunload', function (e) {
         if (isBusy()) e.preventDefault();
@@ -140,7 +132,6 @@
           'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
       }
 
-      // Persist draft push options so a page reload keeps them.
       function saveState() {
         var body = new URLSearchParams();
         body.set('time', pushTime.value);
@@ -177,6 +168,84 @@
         return false;
       }
 
+      function applyLock() {
+        var busy = isBusy();
+        var jobBusy = lock === 'suggest' || lock === 'push';
+        picker.disabled = busy;
+        pickerLabel.classList.toggle('disabled', busy);
+        if (suggestBtn) suggestBtn.disabled = busy;
+        pushBtn.disabled = busy;
+        pushTime.disabled = jobBusy;
+        pushTitle.disabled = jobBusy;
+        drop.classList.toggle('pe-none', busy);
+        filesEl.querySelectorAll('button[data-name]').forEach(function (btn) {
+          btn.disabled = busy;
+        });
+      }
+
+      function applyState(st) {
+        if (!st) return;
+        if (st.time && document.activeElement !== pushTime) pushTime.value = st.time;
+        if (document.activeElement !== pushTitle) pushTitle.value = st.title || '';
+      }
+
+      function showJob() {
+        jobBox.classList.remove('d-none');
+      }
+
+      function setBar(pct, animated, status, cls) {
+        showJob();
+        if (animated) jobBar.classList.add('progress-bar-animated');
+        else jobBar.classList.remove('progress-bar-animated');
+        jobBar.style.width = pct + '%';
+        jobBar.textContent = pct + '%';
+        jobStatus.className = 'small mt-1 mb-0 ' + (cls || 'text-secondary');
+        jobStatus.textContent = status;
+      }
+
+      function renderJob(job) {
+        if (staging) return;
+        if (!job) {
+          if (lock === 'stage') {
+            setBar(100, true, 'Staging files…');
+          }
+          return;
+        }
+        if (job.error) {
+          var fail = job.kind === 'suggest' ? 'Suggest failed' : 'Upload failed: ' + job.error;
+          setBar(parseInt(jobBar.style.width, 10) || 0, false, fail, 'text-danger');
+          return;
+        }
+        if (job.kind === 'suggest') {
+          var msg = job.message || 'Suggesting a title…';
+          if (job.file) msg += ' (' + job.file + ')';
+          var spct = job.total > 0 ? Math.floor(job.done * 100 / job.total) : 0;
+          setBar(spct, true, msg);
+          return;
+        }
+        if (job.kind === 'push') {
+          var pct = job.total_bytes > 0 ? Math.floor(job.done_bytes * 100 / job.total_bytes) : 0;
+          var n = job.done + (job.file ? 1 : 0);
+          var label = 'Uploading ' + n + '/' + job.total;
+          if (job.file) label += ' (' + job.file + ')';
+          if (job.prefix) label += ' to ' + job.prefix;
+          setBar(pct, true, label);
+        }
+      }
+
+      function renderDone(job) {
+        if (!job) return;
+        if (job.kind === 'suggest') {
+          if (job.title) pushTitle.value = job.title;
+          if (job.time) pushTime.value = job.time;
+          setBar(100, false, 'Title set.', 'text-success');
+          return;
+        }
+        if (job.kind === 'push') {
+          setBar(100, false, 'Uploaded to ' + (job.prefix || 'OSS'), 'text-success');
+        }
+      }
+
       function render(files) {
         filesEl.replaceChildren();
         if (!files || !files.length) {
@@ -187,6 +256,7 @@
           td.textContent = 'No files';
           empty.appendChild(td);
           filesEl.appendChild(empty);
+          applyLock();
           return;
         }
         files.forEach(function (f) {
@@ -216,32 +286,71 @@
           tr.appendChild(actTd);
           filesEl.appendChild(tr);
         });
+        applyLock();
       }
 
-      function refresh() {
-        return fetch('/upload/files', { credentials: 'same-origin' }).then(function (res) {
-          if (goLoginIfNeeded(res)) return;
-          if (!res.ok) throw new Error('list failed');
-          return res.json();
-        }).then(function (data) {
-          if (!data) return;
-          render(data.files || []);
-          // Only clear a stale list error; keep upload/push messages visible.
-          if (statusEl.textContent === 'Could not list workspace files.') showError('');
-        }).catch(function () {
-          showError('Could not list workspace files.');
-        });
+      function parseData(e) {
+        try { return JSON.parse(e.data); } catch (err) { return null; }
       }
 
-      // Upload one file via XHR so upload progress events are available.
+      var es = new EventSource('/upload/events');
+      es.addEventListener('snapshot', function (e) {
+        var data = parseData(e);
+        if (!data) return;
+        lock = data.lock || '';
+        render(data.files || []);
+        applyState(data.state);
+        if (data.job) {
+          if (lock) renderJob(data.job);
+          else if (data.job.error) renderJob(data.job);
+          else renderDone(data.job);
+        } else {
+          applyLock();
+        }
+      });
+      es.addEventListener('lock', function (e) {
+        var data = parseData(e);
+        if (!data) return;
+        lock = data.lock || '';
+        applyLock();
+        if (lock === 'stage' && !staging) {
+          renderJob(null);
+        } else if (!lock && !staging && jobStatus.textContent === 'Staging files…') {
+          jobBox.classList.add('d-none');
+        }
+      });
+      es.addEventListener('files', function (e) {
+        var data = parseData(e);
+        if (data) render(data.files || []);
+      });
+      es.addEventListener('state', function (e) {
+        applyState(parseData(e));
+      });
+      es.addEventListener('progress', function (e) {
+        renderJob(parseData(e));
+      });
+      es.addEventListener('done', function (e) {
+        renderDone(parseData(e));
+      });
+      es.addEventListener('error', function (e) {
+        if (typeof e.data === 'string' && e.data) {
+          var job = parseData(e);
+          if (job) renderJob(job);
+          return;
+        }
+        fetch('/upload/files', { credentials: 'same-origin' }).then(function (res) {
+          goLoginIfNeeded(res);
+        }).catch(function () {});
+      });
+
       function uploadOne(file, onprogress) {
         return new Promise(function (resolve, reject) {
           var fd = new FormData();
           fd.append('file', file);
           var xhr = new XMLHttpRequest();
           xhr.open('POST', '/upload/files');
-          xhr.upload.onprogress = function (e) {
-            if (e.lengthComputable) onprogress(e.loaded, e.total);
+          xhr.upload.onprogress = function (ev) {
+            if (ev.lengthComputable) onprogress(ev.loaded, ev.total);
           };
           xhr.onload = function () {
             if (xhr.responseURL && xhr.responseURL.indexOf('/login') !== -1) {
@@ -252,6 +361,8 @@
               resolve();
             } else if (xhr.status === 413) {
               reject(new Error('too large (max 2 GiB)'));
+            } else if (xhr.status === 409) {
+              reject(new Error('workspace busy'));
             } else {
               reject(new Error((xhr.responseText || 'HTTP ' + xhr.status).trim()));
             }
@@ -264,14 +375,10 @@
       function stageProgress(doneBytes, loaded, totalBytes, idx, count, name) {
         var cur = Math.min(doneBytes + loaded, totalBytes);
         var pct = totalBytes > 0 ? Math.floor(cur * 100 / totalBytes) : 100;
-        stageBar.style.width = pct + '%';
-        stageBar.textContent = pct + '%';
-        stageStatus.textContent = 'Uploading ' + idx + '/' + count + ': ' + name +
-          ' (' + fmtBytes(cur) + ' / ' + fmtBytes(totalBytes) + ')';
+        setBar(pct, true, 'Uploading ' + idx + '/' + count + ': ' + name +
+          ' (' + fmtBytes(cur) + ' / ' + fmtBytes(totalBytes) + ')');
       }
 
-      // Sequential queue: one POST per file, so a failure only affects its own
-      // file and progress stays accurate for very large files.
       function uploadFiles(list, dirRejected) {
         if (!list) return;
         if (isBusy()) {
@@ -284,7 +391,6 @@
         for (var i = 0; i < list.length; i++) {
           var f = list[i];
           var name = f.name || '';
-          // Single flat layer only: no folders, no dot-prefixed hidden files.
           if (!name || name.charAt(0) === '.' || f.webkitRelativePath) {
             rejected = true;
           } else if (f.size > stageMax) {
@@ -299,24 +405,24 @@
           picker.value = '';
           return;
         }
-        busy = true;
+        staging = true;
+        applyLock();
         showError('');
-        stageBox.classList.remove('d-none');
         var totalBytes = 0;
         files.forEach(function (f) { totalBytes += f.size; });
         var doneBytes = 0;
         var failed = [];
         var idx = 0;
         function finish() {
-          busy = false;
+          staging = false;
+          applyLock();
           picker.value = '';
-          stageBar.classList.remove('progress-bar-animated');
           if (!failed.length) {
-            stageBar.style.width = '100%';
-            stageBar.textContent = '100%';
+            setBar(100, false, 'Staged ' + files.length + '/' + files.length + ' file(s).');
+          } else {
+            setBar(parseInt(jobBar.style.width, 10) || 0, false,
+              'Staged ' + (files.length - failed.length) + '/' + files.length + ' file(s).');
           }
-          stageStatus.textContent = 'Staged ' + (files.length - failed.length) + '/' + files.length + ' file(s).';
-          refresh();
           var msgs = [];
           if (failed.length) msgs.push('Failed: ' + failed.join('; '));
           if (rejected) msgs.push('Folders and hidden files were skipped.');
@@ -336,10 +442,9 @@
             stageProgress(base, loaded, totalBytes, idx, files.length, f.name);
           }).then(function () {
             doneBytes += f.size;
-            refresh();
             next();
-          }).catch(function (e) {
-            failed.push(f.name + ' (' + e.message + ')');
+          }).catch(function (err) {
+            failed.push(f.name + ' (' + err.message + ')');
             next();
           });
         }
@@ -349,97 +454,40 @@
       function deleteFile(name) {
         if (!name || isBusy()) return;
         if (!confirm('Delete ' + name + '?')) return;
-        busy = true;
         fetch('/upload/files?name=' + encodeURIComponent(name), {
           method: 'DELETE',
           credentials: 'same-origin'
         }).then(function (res) {
           if (goLoginIfNeeded(res)) return;
+          if (res.status === 409) throw new Error('Another operation is in progress, try again in a moment.');
           if (!res.ok) throw new Error('delete failed');
-          return refresh();
-        }).catch(function () {
-          showError('Delete failed.');
-        }).finally(function () { busy = false; });
-      }
-
-      function renderPush(st) {
-        pushRunning = !!(st && st.running);
-        if (!st || (!st.running && !st.prefix)) {
-          pushBox.classList.add('d-none');
-          pushBtn.disabled = false;
-          return;
-        }
-        pushBox.classList.remove('d-none');
-        pushBtn.disabled = !!st.running;
-        if (st.running) {
-          var pct = st.total_bytes > 0 ? Math.floor(st.done_bytes * 100 / st.total_bytes) : 0;
-          pushBar.classList.add('progress-bar-animated');
-          pushBar.style.width = pct + '%';
-          pushBar.textContent = pct + '%';
-          pushStatus.className = 'small text-secondary mt-1 mb-0';
-          pushStatus.textContent = 'Uploading ' + (st.done + 1) + '/' + st.total + ' (' + st.current + ') to ' + st.prefix;
-        } else if (st.error) {
-          pushBar.classList.remove('progress-bar-animated');
-          pushStatus.className = 'small text-danger mt-1 mb-0';
-          pushStatus.textContent = 'Upload failed: ' + st.error;
-        } else {
-          pushBar.classList.remove('progress-bar-animated');
-          pushBar.style.width = '100%';
-          pushBar.textContent = '100%';
-          pushStatus.className = 'small text-success mt-1 mb-0';
-          pushStatus.textContent = 'Uploaded to ' + st.prefix;
-        }
-      }
-
-      function refreshPush() {
-        return fetch('/upload/push/status', { credentials: 'same-origin' }).then(function (res) {
-          if (goLoginIfNeeded(res)) return;
-          if (!res.ok) return;
-          return res.json();
-        }).then(function (st) {
-          if (st) renderPush(st);
-        }).catch(function () {});
+        }).catch(function (err) {
+          showError(err.message || 'Delete failed.');
+        });
       }
 
       if (suggestBtn) suggestBtn.addEventListener('click', function () {
-        if (suggestBtn.disabled) return;
-        if (isBusy()) {
-          showError('Another operation is in progress, try again in a moment.');
-          return;
-        }
-        busy = true;
-        suggestBtn.disabled = true;
+        if (suggestBtn.disabled || isBusy()) return;
+        showError('');
         fetch('/upload/suggest', { method: 'POST', credentials: 'same-origin' })
           .then(function (res) {
             if (goLoginIfNeeded(res)) return;
+            if (res.status === 409) throw new Error('Another operation is in progress, try again in a moment.');
             if (!res.ok) {
               return res.text().then(function (t) { throw new Error((t || 'suggest failed').trim()); });
             }
-            return res.json();
           })
-          .then(function (data) {
-            if (!data) return;
-            // The backend already persisted title/time to the workspace state.
-            pushTitle.value = data.title || '';
-            if (data.time) pushTime.value = data.time;
-            showError('');
-          })
-          .catch(function (e) {
-            showError(e.message || 'Could not suggest a title.');
-          })
-          .finally(function () {
-            busy = false;
-            suggestBtn.disabled = false;
+          .catch(function (err) {
+            showError(err.message || 'Could not suggest a title.');
           });
       });
 
       pushBtn.addEventListener('click', function () {
         if (pushBtn.disabled || isBusy()) return;
-        pushBtn.disabled = true;
-        pushRunning = true;
         var body = new URLSearchParams();
         body.set('time', pushTime.value);
         body.set('title', pushTitle.value);
+        showError('');
         fetch('/upload/push', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -447,18 +495,12 @@
           credentials: 'same-origin'
         }).then(function (res) {
           if (goLoginIfNeeded(res)) return;
-          if (res.status === 409) {
-            showError('An upload to OSS is already running.');
-            return;
-          }
+          if (res.status === 409) throw new Error('Another operation is in progress, try again in a moment.');
           if (!res.ok) {
             return res.text().then(function (t) { throw new Error((t || 'push failed').trim()); });
           }
-          showError('');
-        }).catch(function (e) {
-          showError(e.message || 'Could not start the upload.');
-        }).finally(function () {
-          refreshPush().then(refresh);
+        }).catch(function (err) {
+          showError(err.message || 'Could not start the upload.');
         });
       });
 
@@ -467,7 +509,7 @@
       });
       drop.addEventListener('dragover', function (e) {
         e.preventDefault();
-        drop.classList.add('border-primary');
+        if (!isBusy()) drop.classList.add('border-primary');
       });
       drop.addEventListener('dragleave', function () {
         drop.classList.remove('border-primary');
@@ -502,12 +544,7 @@
         var btn = e.target.closest('button[data-name]');
         if (btn) deleteFile(btn.getAttribute('data-name'));
       });
-      refresh();
-      refreshPush();
-      setInterval(function () {
-        refresh();
-        refreshPush();
-      }, 1000);
+      applyLock();
     })();
   </script>
 </body>

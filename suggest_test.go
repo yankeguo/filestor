@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -69,7 +70,7 @@ func TestUploadSuggestSuccess(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello world"), 0o644))
 	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59"}))
 
-	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	llm := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
 		switch call {
 		case 1:
 			require.Equal(t, "test-model", req.Model)
@@ -94,22 +95,17 @@ func TestUploadSuggestSuccess(t *testing.T) {
 			return ""
 		}
 	})
-	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model", Effort: "high", Headers: map[string]string{"Authorization": "Bearer token"}}
+	cfg.LLM = LLMConfig{URL: llm.URL, Model: "test-model", Effort: "high", Headers: map[string]string{"Authorization": "Bearer token"}}
 
-	h := NewServer(cfg, &fakeStore{}).Handler()
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
 	cookie := loginCookie(t, h)
 	rec := postSuggest(t, h, cookie)
-	require.Equal(t, http.StatusOK, rec.Code)
-	var payload struct {
-		Title string `json:"title"`
-		Time  string `json:"time"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
-	require.Equal(t, "weekly-report", payload.Title)
-	require.Empty(t, payload.Time)
-
-	// Title persisted, pinned time preserved.
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	awaitIdle(t, app)
 	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "weekly-report"}, loadWorkspaceState(dir))
+	require.Equal(t, "weekly-report", app.lastJob().Title)
+	require.Empty(t, app.lastJob().Error)
 }
 
 func TestUploadSuggestImageTool(t *testing.T) {
@@ -149,10 +145,12 @@ func TestUploadSuggestImageTool(t *testing.T) {
 	})
 	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
 
-	h := NewServer(cfg, &fakeStore{}).Handler()
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
 	cookie := loginCookie(t, h)
 	rec := postSuggest(t, h, cookie)
-	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	awaitIdle(t, app)
 	require.Equal(t, "screenshot", loadWorkspaceState(dir).Title)
 }
 
@@ -163,11 +161,14 @@ func TestUploadSuggestNoTitle(t *testing.T) {
 		return `{"choices":[{"message":{"role":"assistant","content":"weekly-report"}}]}`
 	})
 	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
-	h := NewServer(cfg, &fakeStore{}).Handler()
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
 	cookie := loginCookie(t, h)
 	rec := postSuggest(t, h, cookie)
-	require.Equal(t, http.StatusBadGateway, rec.Code)
-	require.Equal(t, "suggest failed\n", rec.Body.String())
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	awaitIdle(t, app)
+	require.Equal(t, "suggest failed", app.lastJob().Error)
+	require.Empty(t, loadWorkspaceState(cfg.Upload.Workspace).Title)
 }
 
 func TestUnmarshalToolArgs(t *testing.T) {
@@ -197,10 +198,12 @@ func TestUploadSuggestObjectArguments(t *testing.T) {
 			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":{"title":"from-object"}}}]}}]}`
 	})
 	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
-	h := NewServer(cfg, &fakeStore{}).Handler()
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
 	cookie := loginCookie(t, h)
 	rec := postSuggest(t, h, cookie)
-	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	awaitIdle(t, app)
 	require.Equal(t, "from-object", loadWorkspaceState(cfg.Upload.Workspace).Title)
 }
 
@@ -239,17 +242,14 @@ func TestUploadSuggestSetDatetime(t *testing.T) {
 		}
 	})
 	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
-	h := NewServer(cfg, &fakeStore{}).Handler()
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
 	cookie := loginCookie(t, h)
 	rec := postSuggest(t, h, cookie)
-	require.Equal(t, http.StatusOK, rec.Code)
-	var payload struct {
-		Title string `json:"title"`
-		Time  string `json:"time"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
-	require.Equal(t, "invoice", payload.Title)
-	require.Equal(t, "2026-08-20T00:00", payload.Time)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	awaitIdle(t, app)
+	require.Equal(t, "invoice", app.lastJob().Title)
+	require.Equal(t, "2026-08-20T00:00", app.lastJob().Time)
 	require.Equal(t, workspaceState{Time: "2026-08-20T00:00", Title: "invoice"}, loadWorkspaceState(dir))
 }
 
@@ -280,11 +280,39 @@ func TestUploadSuggestInvalidDatetimeKeepsPinnedTime(t *testing.T) {
 		}
 	})
 	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
-	h := NewServer(cfg, &fakeStore{}).Handler()
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
 	cookie := loginCookie(t, h)
 	rec := postSuggest(t, h, cookie)
-	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	awaitIdle(t, app)
 	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "ok"}, loadWorkspaceState(dir))
+}
+
+func TestWorkspaceLockDuringSuggest(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("hi"), 0o644))
+	block := make(chan struct{})
+	llm := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+		<-block
+		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"ok\"}"}}]}}]}`
+	})
+	cfg.LLM = LLMConfig{URL: llm.URL, Model: "test-model"}
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
+	cookie := loginCookie(t, h)
+	require.Equal(t, http.StatusAccepted, postSuggest(t, h, cookie).Code)
+	require.Eventually(t, func() bool { return app.lockKind() == lockSuggest }, 2*time.Second, 10*time.Millisecond)
+
+	require.Equal(t, http.StatusConflict, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+	require.Equal(t, http.StatusConflict, postUploadFileRec(t, h, cookie, "b.txt").Code)
+	require.Equal(t, http.StatusConflict, putUploadState(t, h, cookie, "2026-08-24T06:59", "x").Code)
+	require.Equal(t, http.StatusConflict, postSuggest(t, h, cookie).Code)
+
+	close(block)
+	awaitIdle(t, app)
+	require.Equal(t, "ok", loadWorkspaceState(cfg.Upload.Workspace).Title)
 }
 
 func TestReadWorkspaceText(t *testing.T) {

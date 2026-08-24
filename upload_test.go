@@ -56,7 +56,7 @@ func TestSanitizeWorkspaceName(t *testing.T) {
 
 func TestUploadRequiresLogin(t *testing.T) {
 	h := NewServer(cfgWithWorkspace(t), &fakeStore{}).Handler()
-	for _, path := range []string{"/upload", "/upload/files"} {
+	for _, path := range []string{"/upload", "/upload/files", "/upload/events"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -85,6 +85,7 @@ func TestUploadPageAndList(t *testing.T) {
 	require.NotContains(t, body, "subdir")
 	require.Contains(t, body, `href="/upload"`)
 	require.Contains(t, body, "nav-link active")
+	require.Contains(t, body, `EventSource('/upload/events')`)
 	require.NotContains(t, body, "id=\"suggest-btn\"")
 
 	req = httptest.NewRequest(http.MethodGet, "/upload/files", nil)
@@ -225,7 +226,7 @@ func TestUploadAddRejectsEmpty(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-func postUploadFile(t *testing.T, h http.Handler, cookie *http.Cookie, name string) {
+func postUploadFileRec(t *testing.T, h http.Handler, cookie *http.Cookie, name string) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -239,7 +240,12 @@ func postUploadFile(t *testing.T, h http.Handler, cookie *http.Cookie, name stri
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
+	return rec
+}
+
+func postUploadFile(t *testing.T, h http.Handler, cookie *http.Cookie, name string) {
+	t.Helper()
+	require.Equal(t, http.StatusOK, postUploadFileRec(t, h, cookie, name).Code)
 }
 
 func putUploadState(t *testing.T, h http.Handler, cookie *http.Cookie, when, title string) *httptest.ResponseRecorder {
@@ -319,4 +325,5 @@ func TestUploadPageShowsSuggestWhenLLMConfigured(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), `id="suggest-btn"`)
+	require.Contains(t, rec.Body.String(), `EventSource('/upload/events')`)
 }
