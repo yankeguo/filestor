@@ -24,17 +24,9 @@ const (
 )
 
 const suggestSystemPrompt = `You invent a short, descriptive title for a batch of staged files that will be uploaded to object storage under "YYYYMMDDhhmm-TITLE/".
-- Inspect file contents with the tools when the file names alone are not enough.
+- Inspect file contents with the tools when the file names alone are not enough. read_file_as_text and read_file_as_image convert office documents, PDFs, and other formats automatically; you do not need to care about the conversion.
 - The title should be a short phrase (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单".
 - When you have decided, call set_title exactly once with the raw title.`
-
-var suggestImageMIMEs = map[string]string{
-	".png":  "image/png",
-	".jpg":  "image/jpeg",
-	".jpeg": "image/jpeg",
-	".gif":  "image/gif",
-	".webp": "image/webp",
-}
 
 type chatImageURL struct {
 	URL string `json:"url"`
@@ -111,8 +103,8 @@ func nameParamTool(name, description string) chatTool {
 }
 
 var suggestTools = []chatTool{
-	nameParamTool("read_text_file", "Read the contents of a staged text file."),
-	nameParamTool("read_image_file", "Load a staged image file (png/jpg/jpeg/gif/webp) so you can see it."),
+	nameParamTool("read_file_as_text", "Read a staged file as text. Office documents and PDFs are converted automatically."),
+	nameParamTool("read_file_as_image", "Load a staged file as an image (jpeg/png/gif). Oversized or other formats are converted automatically."),
 	{Type: "function", Function: chatToolFunction{
 		Name:        "set_title",
 		Description: "Set the upload title. Call exactly once when you have decided.",
@@ -189,7 +181,7 @@ func (a *suggestAgent) run(ctx context.Context, files []workspaceFile) (string, 
 		msg := resp.Choices[0].Message
 		messages = append(messages, chatMessage{Role: "assistant", Content: msg.Content, ToolCalls: msg.ToolCalls})
 		for _, tc := range msg.ToolCalls {
-			messages = append(messages, a.runTool(tc)...)
+			messages = append(messages, a.runTool(ctx, tc)...)
 		}
 		if a.title != "" {
 			return a.title, nil
@@ -203,8 +195,8 @@ func (a *suggestAgent) run(ctx context.Context, files []workspaceFile) (string, 
 
 // runTool executes one tool call and returns the message(s) to append: always
 // a tool reply, plus an extra user message carrying the image for
-// read_image_file.
-func (a *suggestAgent) runTool(tc chatToolCall) []chatMessage {
+// read_file_as_image.
+func (a *suggestAgent) runTool(ctx context.Context, tc chatToolCall) []chatMessage {
 	reply := func(text string) []chatMessage {
 		return []chatMessage{{Role: "tool", ToolCallID: tc.ID, Content: text}}
 	}
@@ -216,14 +208,14 @@ func (a *suggestAgent) runTool(tc chatToolCall) []chatMessage {
 		return reply("invalid arguments: " + err.Error())
 	}
 	switch tc.Function.Name {
-	case "read_text_file":
-		text, err := readWorkspaceText(a.dir, args.Name)
+	case "read_file_as_text":
+		text, err := readWorkspaceText(ctx, a.dir, args.Name)
 		if err != nil {
 			return reply("error: " + err.Error())
 		}
 		return reply(text)
-	case "read_image_file":
-		mime, data, err := readWorkspaceImage(a.dir, args.Name)
+	case "read_file_as_image":
+		mime, data, err := readWorkspaceImage(ctx, a.dir, args.Name)
 		if err != nil {
 			return reply("error: " + err.Error())
 		}
@@ -309,12 +301,21 @@ func unmarshalToolArgs(raw json.RawMessage, dest any) error {
 }
 
 // readWorkspaceText reads a staged file as text: NUL-sniffed, capped at 64 KiB.
-func readWorkspaceText(dir, name string) (string, error) {
+// Office/PDF binaries are converted in a temp dir and never mutate staging.
+func readWorkspaceText(ctx context.Context, dir, name string) (string, error) {
 	name, err := sanitizeWorkspaceName(name)
 	if err != nil {
 		return "", err
 	}
-	f, err := os.Open(filepath.Join(dir, name))
+	ext := strings.ToLower(filepath.Ext(name))
+	if imageAsTextExts[ext] {
+		return "", errUseImageTool
+	}
+	src := filepath.Join(dir, name)
+	if forceTextConvertExts[ext] {
+		return convertFileToText(ctx, src)
+	}
+	f, err := os.Open(src)
 	if err != nil {
 		return "", err
 	}
@@ -324,50 +325,46 @@ func readWorkspaceText(dir, name string) (string, error) {
 		return "", err
 	}
 	if bytes.IndexByte(data, 0) >= 0 {
-		return "", errors.New("not a text file")
+		return convertFileToText(ctx, src)
 	}
-	truncated := len(data) > suggestTextMaxBytes
-	if truncated {
-		data = data[:suggestTextMaxBytes]
-	}
-	out := string(data)
-	if strings.TrimSpace(out) == "" {
-		return "(empty file)", nil
-	}
-	if truncated {
-		out += "\n... (truncated)"
-	}
-	return out, nil
+	return capConvertedText(data), nil
 }
 
-// readWorkspaceImage reads a staged image file, capped at 8 MiB.
-func readWorkspaceImage(dir, name string) (string, []byte, error) {
+// readWorkspaceImage loads a staged file as jpeg/png/gif for the model.
+// Small native jpeg/png/gif are returned as-is; anything else is converted.
+func readWorkspaceImage(ctx context.Context, dir, name string) (string, []byte, error) {
 	name, err := sanitizeWorkspaceName(name)
 	if err != nil {
 		return "", nil, err
 	}
-	mime, ok := suggestImageMIMEs[strings.ToLower(filepath.Ext(name))]
-	if !ok {
-		return "", nil, errors.New("not a supported image (png/jpg/jpeg/gif/webp)")
-	}
-	info, err := os.Stat(filepath.Join(dir, name))
+	src := filepath.Join(dir, name)
+	f, err := os.Open(src)
 	if err != nil {
 		return "", nil, err
 	}
-	if info.Size() > suggestImageMaxBytes {
-		return "", nil, fmt.Errorf("image too large (%s, max 8 MiB)", formatSize(info.Size()))
-	}
-	f, err := os.Open(filepath.Join(dir, name))
+	head := make([]byte, 16)
+	n, _ := f.Read(head)
+	mime := sniffImageMIME(head[:n])
+	info, err := f.Stat()
 	if err != nil {
+		_ = f.Close()
 		return "", nil, err
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, suggestImageMaxBytes+1))
-	if err != nil {
-		return "", nil, err
+	if mime != "" && info.Size() <= suggestImageMaxBytes {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			_ = f.Close()
+			return "", nil, err
+		}
+		data, err := io.ReadAll(io.LimitReader(f, suggestImageMaxBytes+1))
+		_ = f.Close()
+		if err != nil {
+			return "", nil, err
+		}
+		if int64(len(data)) <= suggestImageMaxBytes {
+			return mime, data, nil
+		}
+	} else {
+		_ = f.Close()
 	}
-	if int64(len(data)) > suggestImageMaxBytes {
-		return "", nil, fmt.Errorf("image too large (%s, max 8 MiB)", formatSize(int64(len(data))))
-	}
-	return mime, data, nil
+	return convertFileToLLMImage(ctx, src)
 }

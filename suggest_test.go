@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -76,7 +77,7 @@ func TestUploadSuggestSuccess(t *testing.T) {
 			require.Equal(t, "Bearer token", r.Header.Get("Authorization"))
 			require.Len(t, req.Tools, 3)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-				`{"id":"c1","type":"function","function":{"name":"read_text_file","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
+				`{"id":"c1","type":"function","function":{"name":"read_file_as_text","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
 		case 2:
 			// The tool reply carries the file content back to the model.
 			found := false
@@ -112,14 +113,14 @@ func TestUploadSuggestSuccess(t *testing.T) {
 func TestUploadSuggestImageTool(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	dir := cfg.Upload.Workspace
-	png := []byte{0x89, 'P', 'N', 'G'}
+	png := append(append([]byte{}, pngSig...), []byte("rest")...)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "pic.png"), png, 0o644))
 
 	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
 		switch call {
 		case 1:
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-				`{"id":"c1","type":"function","function":{"name":"read_image_file","arguments":"{\"name\":\"pic.png\"}"}}]}}]}`
+				`{"id":"c1","type":"function","function":{"name":"read_file_as_image","arguments":"{\"name\":\"pic.png\"}"}}]}}]}`
 		case 2:
 			// The image is appended as a user message with a base64 image_url part.
 			found := false
@@ -202,39 +203,52 @@ func TestUploadSuggestObjectArguments(t *testing.T) {
 }
 
 func TestReadWorkspaceText(t *testing.T) {
+	stubConvert(t, noBins, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatal("runCmd should not be called for native text")
+		return nil, nil
+	})
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "bin.dat"), []byte{'a', 0, 'b'}, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "empty.txt"), nil, 0o644))
 
-	text, err := readWorkspaceText(dir, "a.txt")
+	text, err := readWorkspaceText(context.Background(), dir, "a.txt")
 	require.NoError(t, err)
 	require.Equal(t, "hello", text)
 
-	_, err = readWorkspaceText(dir, "bin.dat")
+	_, err = readWorkspaceText(context.Background(), dir, "bin.dat")
 	require.Error(t, err)
+	require.ErrorIs(t, err, errConvertUnavailable)
 
-	text, err = readWorkspaceText(dir, "empty.txt")
+	text, err = readWorkspaceText(context.Background(), dir, "empty.txt")
 	require.NoError(t, err)
 	require.Equal(t, "(empty file)", text)
 
-	_, err = readWorkspaceText(dir, "../secret")
+	_, err = readWorkspaceText(context.Background(), dir, "../secret")
 	require.Error(t, err)
 
-	_, err = readWorkspaceText(dir, ".hidden")
+	_, err = readWorkspaceText(context.Background(), dir, ".hidden")
 	require.Error(t, err)
+
+	_, err = readWorkspaceText(context.Background(), dir, "pic.png")
+	require.ErrorIs(t, err, errUseImageTool)
 }
 
 func TestReadWorkspaceImage(t *testing.T) {
+	stubConvert(t, noBins, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatal("runCmd should not be called for a small png")
+		return nil, nil
+	})
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "pic.PNG"), []byte("data"), 0o644))
+	png := append(append([]byte{}, pngSig...), []byte("rest")...)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pic.PNG"), png, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
 
-	mime, data, err := readWorkspaceImage(dir, "pic.PNG")
+	mime, data, err := readWorkspaceImage(context.Background(), dir, "pic.PNG")
 	require.NoError(t, err)
 	require.Equal(t, "image/png", mime)
-	require.Equal(t, []byte("data"), data)
+	require.Equal(t, png, data)
 
-	_, _, err = readWorkspaceImage(dir, "a.txt")
+	_, _, err = readWorkspaceImage(context.Background(), dir, "a.txt")
 	require.Error(t, err)
 }
