@@ -42,6 +42,7 @@ type UploadConfig struct {
 type LLMConfig struct {
 	URL     string            `yaml:"url"`
 	Model   string            `yaml:"model"`
+	Effort  string            `yaml:"effort"`
 	Headers map[string]string `yaml:"headers"`
 }
 
@@ -93,6 +94,7 @@ func (c *Config) validate() error {
 	}
 	c.LLM.URL = strings.TrimSpace(c.LLM.URL)
 	c.LLM.Model = strings.TrimSpace(c.LLM.Model)
+	c.LLM.Effort = strings.TrimSpace(c.LLM.Effort)
 	if (c.LLM.URL == "") != (c.LLM.Model == "") {
 		return fmt.Errorf("config: llm.url and llm.model must be set together")
 	}

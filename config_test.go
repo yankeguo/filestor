@@ -44,6 +44,7 @@ func TestLoadConfigLLM(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(ossYAML()+`llm:
   url: ' https://api.example.com/v1/chat/completions '
   model: ' my-model '
+  effort: ' high '
   headers:
     Authorization: ' Bearer token '
     X-Team: blue
@@ -52,6 +53,7 @@ func TestLoadConfigLLM(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://api.example.com/v1/chat/completions", cfg.LLM.URL)
 	require.Equal(t, "my-model", cfg.LLM.Model)
+	require.Equal(t, "high", cfg.LLM.Effort)
 	require.Equal(t, map[string]string{"Authorization": "Bearer token", "X-Team": "blue"}, cfg.LLM.Headers)
 }
 

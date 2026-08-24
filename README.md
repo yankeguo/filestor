@@ -5,7 +5,7 @@ Cookie-authenticated browser for an Aliyun OSS bucket. Listing goes through this
 ## Features
 
 - Standard `net/http` server
-- YAML config: `admin.{username,password}`, `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}`, optional `upload.workspace` and `llm.{url,model,headers}`
+- YAML config: `admin.{username,password}`, `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}`, optional `upload.workspace` and `llm.{url,model,effort,headers}`
 - Cookie login (HMAC, HttpOnly, SameSite=Lax)
 - Prefix listing treated as folders (`Delimiter=/`)
 - `GET /download` 302s to a 5-minute OSS GET URL (`Content-Disposition: attachment`)
@@ -58,11 +58,12 @@ upload:
 # llm:
 #   url: https://api.example.com/v1/chat/completions
 #   model: my-model
+#   effort: medium
 #   headers:
 #     Authorization: Bearer REPLACE_ME
 ```
 
-All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}` are required. Field names follow the official Aliyun OSS API (`access_key_id` / `access_key_secret` / `endpoint`), not AWS/boto3 names. `endpoint` may omit `https://`; it is added on load. `upload.workspace` defaults to `upload-workspace` (relative to the process working directory; in the container that is `/upload-workspace`). `llm.{url,model,headers}` is an optional OpenAI-compatible endpoint reserved for future LLM features; `url` and `model` must be set together, and `headers` is an optional map of extra HTTP headers (e.g. `Authorization`). Do not commit `config.yaml`.
+All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}` are required. Field names follow the official Aliyun OSS API (`access_key_id` / `access_key_secret` / `endpoint`), not AWS/boto3 names. `endpoint` may omit `https://`; it is added on load. `upload.workspace` defaults to `upload-workspace` (relative to the process working directory; in the container that is `/upload-workspace`). `llm.{url,model,effort,headers}` is an optional OpenAI-compatible endpoint reserved for future LLM features; `url` and `model` must be set together, `effort` is the model's reasoning effort, and `headers` is an optional map of extra HTTP headers (e.g. `Authorization`). Do not commit `config.yaml`.
 
 ## Auth
 

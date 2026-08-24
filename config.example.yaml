@@ -10,9 +10,11 @@ aliyun:
 upload:
   workspace: upload-workspace
 # Optional OpenAI-compatible LLM endpoint (reserved for future use).
-# url and model must be set together; headers is an optional map of HTTP headers.
+# url and model must be set together; effort is the model's reasoning effort;
+# headers is an optional map of HTTP headers.
 # llm:
 #   url: https://api.example.com/v1/chat/completions
 #   model: my-model
+#   effort: medium
 #   headers:
 #     Authorization: Bearer REPLACE_ME
