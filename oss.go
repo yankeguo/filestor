@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/url"
 	"path"
 	"strings"
@@ -32,6 +33,7 @@ type ListPage struct {
 type ObjectStore interface {
 	List(prefix, marker string) (ListPage, error)
 	SignGetURL(key string, ttl time.Duration) (string, error)
+	Put(key string, r io.Reader) error
 }
 
 type ossStore struct {
@@ -81,6 +83,10 @@ func (s *ossStore) List(prefix, marker string) (ListPage, error) {
 		})
 	}
 	return page, nil
+}
+
+func (s *ossStore) Put(key string, r io.Reader) error {
+	return s.bucket.PutObject(key, r)
 }
 
 func (s *ossStore) SignGetURL(key string, ttl time.Duration) (string, error) {

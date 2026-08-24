@@ -2,14 +2,21 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+type putCall struct {
+	Key  string
+	Data []byte
+}
 
 type fakeStore struct {
 	page     ListPage
@@ -17,6 +24,12 @@ type fakeStore struct {
 	err      error
 	lastList [2]string
 	lastKey  string
+
+	putErr   error
+	putHook  func(key string)
+	putBlock chan struct{}
+	putsMu   sync.Mutex
+	puts     []putCall
 }
 
 func (f *fakeStore) List(prefix, marker string) (ListPage, error) {
@@ -33,6 +46,36 @@ func (f *fakeStore) SignGetURL(key string, ttl time.Duration) (string, error) {
 		return f.signed, nil
 	}
 	return "https://example.oss-cn-hangzhou.aliyuncs.com/" + url.PathEscape(key) + "?sig=1", nil
+}
+
+func (f *fakeStore) Put(key string, r io.Reader) error {
+	if f.putHook != nil {
+		f.putHook(key)
+	}
+	if f.putBlock != nil {
+		<-f.putBlock
+	}
+	if f.putErr != nil {
+		return f.putErr
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	f.putsMu.Lock()
+	f.puts = append(f.puts, putCall{Key: key, Data: b})
+	f.putsMu.Unlock()
+	return nil
+}
+
+func (f *fakeStore) putKeys() []string {
+	f.putsMu.Lock()
+	defer f.putsMu.Unlock()
+	keys := make([]string, 0, len(f.puts))
+	for _, p := range f.puts {
+		keys = append(keys, p.Key)
+	}
+	return keys
 }
 
 func TestBrowseListsDirsAndFiles(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -13,6 +14,8 @@ type Server struct {
 	Config     *Config
 	store      ObjectStore
 	sessionKey []byte
+	pushMu     sync.Mutex
+	push       *pushJob
 }
 
 func NewServer(cfg *Config, store ObjectStore) *Server {
@@ -36,6 +39,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadList)))
 	mux.Handle("POST /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadAdd)))
 	mux.Handle("DELETE /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadDelete)))
+	mux.Handle("POST /upload/push", s.requireAuth(http.HandlerFunc(s.handleUploadPush)))
+	mux.Handle("GET /upload/push/status", s.requireAuth(http.HandlerFunc(s.handleUploadPushStatus)))
 	return withSecurityHeaders(mux)
 }
 

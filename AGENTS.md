@@ -14,9 +14,10 @@ Single `package main`. No `internal/` split unless the tree clearly outgrows one
 | `config.go` | YAML load/validate; OSS endpoint `https://` prefix if missing |
 | `auth.go` | HMAC session cookie `filestor`; `requireAuth` 302s to `/login` |
 | `server.go` | `net/http` mux, security headers, login/logout, `/` → `/browse`, browse + download handlers |
-| `oss.go` | `ObjectStore` (`List`, `SignGetURL`); Aliyun OSS SDK v3 behind `ossStore` |
+| `oss.go` | `ObjectStore` (`List`, `SignGetURL`, `Put`); Aliyun OSS SDK v3 behind `ossStore` |
 | `browse.go` | Prefix normalize, breadcrumbs, parent, table rows, size/time formatting |
 | `upload.go` | Local upload workspace: list/add/delete under `upload.workspace`; `/upload` UI |
+| `push.go` | Async push of staged files to OSS under `YYYY/MM/YYYYMMDD-HHmm-TITLE/`; one job at a time, progress state |
 | `web/*.html` | Embedded HTML. Bootstrap 5.3 (jsdelivr CDN, SRI) with `data-bs-theme="dark"` + Bootstrap Icons; keep SRI hashes matching nanollm unless bumping the CDN URLs |
 | `web_tmpl.go` | `//go:embed web/*.html` |
 
@@ -31,8 +32,9 @@ Tests live next to the code (`*_test.go`). Use `github.com/stretchr/testify`. Pr
 - Browser lives at **`GET /browse`**. `GET /` is an unauthenticated 302 to `/browse` so `/` can host other pages later. Navbar brand stays `href="/"`. Login success and already-logged-in `GET /login` redirect to `/browse`. Browse links stay under `/browse?...`, never `/`.
 - `/browse`, `/download`, and `/upload*` are cookie-protected. `GET /healthz` and `GET /` are not. Cookie: HMAC-SHA256 over `username|expiry`, HttpOnly, SameSite=Lax; `Secure` when TLS or `X-Forwarded-Proto: https`. TTL 12 hours; key is derived from username+password so a password change invalidates sessions. Failed login delays 1s. Constant-time compare via SHA256 of credentials.
 - `http.Server.Shutdown` uses an unbounded context: SIGINT/SIGTERM stops accepting connections and waits indefinitely; after the first signal, SIGINT/SIGTERM is unregistered so a second signal can terminate. Do not add a Shutdown timeout.
-- **`/upload` is a local staging directory only.** `GET /upload` + `GET|POST|DELETE /upload/files`. Write files under `upload.workspace` (create the dir if missing). List only regular files in the workspace root; skip subdirectories and dot-prefixed hidden files (incl. `.upload-*` temp files). Sanitize names with `path.Base`; reject empty names and any dot-prefixed (hidden) name, which covers `.`, `..`, and `.upload-*`. The UI also skips folder drops and hidden files client-side. Do not PUT to OSS from this page. Do not serve workspace bytes. Multipart field is `file`; max request size 2 GiB.
-- There is no OSS upload, search, or multi-bucket UI unless asked.
+- **`/upload` is a local staging directory plus an OSS push.** `GET /upload` + `GET|POST|DELETE /upload/files` manage staging: write files under `upload.workspace` (create the dir if missing), list only regular files in the workspace root, skip subdirectories and dot-prefixed hidden files (incl. `.upload-*` temp files). Sanitize names with `path.Base`; reject empty names and any dot-prefixed (hidden) name, which covers `.`, `..`, and `.upload-*`. The UI also skips folder drops and hidden files client-side. Do not serve workspace bytes. Multipart field is `file`; max request size 2 GiB.
+- **Push to OSS is async and single-flight.** `POST /upload/push` (form `time` = `YYYY-MM-DDTHH:mm` wall clock, `title`) snapshots the staged files and starts a background job that `Put`s each to `YYYY/MM/YYYYMMDD-HHmm-TITLE/<name>` (title sanitized: letters/digits/`_`/`.`, everything else folds to `-`, max 80 runes) and removes it from staging on success; the first failure stops the job and keeps the rest staged. Only one job runs at a time — a second `POST` gets 409. `GET /upload/push/status` returns the mutex-guarded `pushState` (running, prefix, done/total files, done/total bytes, current file, error); the `/upload` page polls it every 1s for the progress bar. The job goroutine is not joined on shutdown.
+- There is no search or multi-bucket UI unless asked.
 - Do not commit `config.yaml` (secrets). Change `config.example.yaml` and README when the config schema changes.
 - Images: `ghcr.io/${{ github.repository }}`. Push `main` → `latest`; push a git tag → that tag. Workflow: `.github/workflows/release.yml`. Image sets `FILESTOR_CONFIG=/config.yaml`. Flags/env: `-config`/`FILESTOR_CONFIG` default `config.yaml`; `-listen`/`FILESTOR_LISTEN` default `:8080`.
 

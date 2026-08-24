@@ -11,6 +11,30 @@
   <main class="container py-4">
     <p class="text-secondary mb-3">Staging files in <code>{{.Workspace}}</code>. They are not sent to OSS yet.</p>
     <p id="status" class="text-danger small mb-3 d-none"></p>
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-12 col-md-auto">
+            <input id="push-time" type="datetime-local" class="form-control" step="60">
+          </div>
+          <div class="col">
+            <input id="push-title" type="text" class="form-control" maxlength="80" placeholder="Title, e.g. weekly report">
+          </div>
+          <div class="col-12 col-md-auto">
+            <button id="push-btn" type="button" class="btn btn-primary w-100">
+              <i class="bi bi-cloud-upload"></i> Upload to OSS
+            </button>
+          </div>
+        </div>
+        <p class="text-secondary small mt-2 mb-0">Staged files are uploaded to <code>YYYY/MM/YYYYMMDD-HHmm-TITLE/</code> in the bucket and removed from staging. Time is used as picked, whatever the timezone.</p>
+        <div id="push-box" class="mt-3 d-none">
+          <div class="progress" role="progressbar">
+            <div id="push-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div>
+          </div>
+          <p id="push-status" class="small mt-1 mb-0"></p>
+        </div>
+      </div>
+    </div>
     <div id="drop" class="card border mb-3">
       <div class="card-body text-center py-5">
         <i class="bi bi-cloud-arrow-up d-block mb-2" style="font-size:2rem"></i>
@@ -63,7 +87,20 @@
       var drop = document.getElementById('drop');
       var picker = document.getElementById('picker');
       var statusEl = document.getElementById('status');
+      var pushTime = document.getElementById('push-time');
+      var pushTitle = document.getElementById('push-title');
+      var pushBtn = document.getElementById('push-btn');
+      var pushBox = document.getElementById('push-box');
+      var pushBar = document.getElementById('push-bar');
+      var pushStatus = document.getElementById('push-status');
       var busy = false;
+
+      function pad2(n) { return (n < 10 ? '0' : '') + n; }
+      (function () {
+        var d = new Date();
+        pushTime.value = d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) +
+          'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+      })();
 
       function showError(msg) {
         if (!msg) {
@@ -190,6 +227,72 @@
         }).finally(function () { busy = false; });
       }
 
+      function renderPush(st) {
+        if (!st || (!st.running && !st.prefix)) {
+          pushBox.classList.add('d-none');
+          pushBtn.disabled = false;
+          return;
+        }
+        pushBox.classList.remove('d-none');
+        pushBtn.disabled = !!st.running;
+        if (st.running) {
+          var pct = st.total_bytes > 0 ? Math.floor(st.done_bytes * 100 / st.total_bytes) : 0;
+          pushBar.classList.add('progress-bar-animated');
+          pushBar.style.width = pct + '%';
+          pushBar.textContent = pct + '%';
+          pushStatus.className = 'small text-secondary mt-1 mb-0';
+          pushStatus.textContent = 'Uploading ' + (st.done + 1) + '/' + st.total + ' (' + st.current + ') to ' + st.prefix;
+        } else if (st.error) {
+          pushBar.classList.remove('progress-bar-animated');
+          pushStatus.className = 'small text-danger mt-1 mb-0';
+          pushStatus.textContent = 'Upload failed: ' + st.error;
+        } else {
+          pushBar.classList.remove('progress-bar-animated');
+          pushBar.style.width = '100%';
+          pushBar.textContent = '100%';
+          pushStatus.className = 'small text-success mt-1 mb-0';
+          pushStatus.textContent = 'Uploaded to ' + st.prefix;
+        }
+      }
+
+      function refreshPush() {
+        return fetch('/upload/push/status', { credentials: 'same-origin' }).then(function (res) {
+          if (goLoginIfNeeded(res)) return;
+          if (!res.ok) return;
+          return res.json();
+        }).then(function (st) {
+          if (st) renderPush(st);
+        }).catch(function () {});
+      }
+
+      pushBtn.addEventListener('click', function () {
+        if (pushBtn.disabled) return;
+        pushBtn.disabled = true;
+        var body = new URLSearchParams();
+        body.set('time', pushTime.value);
+        body.set('title', pushTitle.value);
+        fetch('/upload/push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body.toString(),
+          credentials: 'same-origin'
+        }).then(function (res) {
+          if (goLoginIfNeeded(res)) return;
+          if (res.status === 409) {
+            showError('An upload to OSS is already running.');
+            return;
+          }
+          if (!res.ok) {
+            return res.text().then(function (t) { throw new Error((t || 'push failed').trim()); });
+          }
+          showError('');
+        }).catch(function (e) {
+          showError(e.message || 'Could not start the upload.');
+        }).finally(function () {
+          refreshPush().then(refresh);
+        });
+      });
+
       picker.addEventListener('change', function () {
         uploadFiles(picker.files);
       });
@@ -231,7 +334,11 @@
         if (btn) deleteFile(btn.getAttribute('data-name'));
       });
       refresh();
-      setInterval(refresh, 1000);
+      refreshPush();
+      setInterval(function () {
+        refresh();
+        refreshPush();
+      }, 1000);
     })();
   </script>
 </body>
