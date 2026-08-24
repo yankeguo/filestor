@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
@@ -136,6 +137,10 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing key", http.StatusBadRequest)
 		return
 	}
+	if strings.ContainsRune(key, 0) || strings.ContainsAny(key, "\r\n") {
+		http.Error(w, "invalid key", http.StatusBadRequest)
+		return
+	}
 	signed, err := s.store.SignGetURL(key, signURLTTL)
 	if err != nil {
 		log.Println("sign url:", err)
@@ -149,5 +154,13 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := webTmpl.ExecuteTemplate(w, name, data); err != nil {
 		log.Println("template:", err)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Println("encode json:", err)
 	}
 }

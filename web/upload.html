@@ -15,16 +15,20 @@
       <div class="card-body">
         <div class="row g-2">
           <div class="col-12 col-md-auto">
+            <label class="visually-hidden" for="push-time">Push time</label>
             <input id="push-time" type="datetime-local" class="form-control" step="60" value="{{.Time}}">
           </div>
           <div class="col">
+            <label class="visually-hidden" for="push-title">Title</label>
             <input id="push-title" type="text" class="form-control" maxlength="80" value="{{.Title}}" placeholder="Title, e.g. weekly report">
           </div>
+          {{if .CanSuggest}}
           <div class="col-12 col-md-auto">
             <button id="suggest-btn" type="button" class="btn btn-outline-secondary w-100" title="Suggest a title from the staged files with the configured LLM">
               <i class="bi bi-magic"></i> Suggest
             </button>
           </div>
+          {{end}}
           <div class="col-12 col-md-auto">
             <button id="push-btn" type="button" class="btn btn-primary w-100">
               <i class="bi bi-cloud-upload"></i> Upload to OSS
@@ -109,10 +113,14 @@
       var stageBar = document.getElementById('stage-bar');
       var stageStatus = document.getElementById('stage-status');
       var busy = false;
+      var pushRunning = false;
       var stageMax = 2 * 1024 * 1024 * 1024;
+      var saveTimer;
+
+      function isBusy() { return busy || pushRunning; }
 
       window.addEventListener('beforeunload', function (e) {
-        if (busy) e.preventDefault();
+        if (isBusy()) e.preventDefault();
       });
 
       function fmtBytes(n) {
@@ -146,6 +154,10 @@
       }
       pushTime.addEventListener('change', saveState);
       pushTitle.addEventListener('change', saveState);
+      pushTitle.addEventListener('input', function () {
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(saveState, 400);
+      });
 
       function showError(msg) {
         if (!msg) {
@@ -262,7 +274,7 @@
       // file and progress stays accurate for very large files.
       function uploadFiles(list, dirRejected) {
         if (!list) return;
-        if (busy) {
+        if (isBusy()) {
           showError('Another operation is in progress, try again in a moment.');
           return;
         }
@@ -299,8 +311,10 @@
           busy = false;
           picker.value = '';
           stageBar.classList.remove('progress-bar-animated');
-          stageBar.style.width = '100%';
-          stageBar.textContent = '100%';
+          if (!failed.length) {
+            stageBar.style.width = '100%';
+            stageBar.textContent = '100%';
+          }
           stageStatus.textContent = 'Staged ' + (files.length - failed.length) + '/' + files.length + ' file(s).';
           refresh();
           var msgs = [];
@@ -333,7 +347,7 @@
       }
 
       function deleteFile(name) {
-        if (!name || busy) return;
+        if (!name || isBusy()) return;
         if (!confirm('Delete ' + name + '?')) return;
         busy = true;
         fetch('/upload/files?name=' + encodeURIComponent(name), {
@@ -349,6 +363,7 @@
       }
 
       function renderPush(st) {
+        pushRunning = !!(st && st.running);
         if (!st || (!st.running && !st.prefix)) {
           pushBox.classList.add('d-none');
           pushBtn.disabled = false;
@@ -386,12 +401,13 @@
         }).catch(function () {});
       }
 
-      suggestBtn.addEventListener('click', function () {
+      if (suggestBtn) suggestBtn.addEventListener('click', function () {
         if (suggestBtn.disabled) return;
-        if (busy) {
+        if (isBusy()) {
           showError('Another operation is in progress, try again in a moment.');
           return;
         }
+        busy = true;
         suggestBtn.disabled = true;
         fetch('/upload/suggest', { method: 'POST', credentials: 'same-origin' })
           .then(function (res) {
@@ -410,11 +426,16 @@
           .catch(function (e) {
             showError(e.message || 'Could not suggest a title.');
           })
-          .finally(function () { suggestBtn.disabled = false; });
+          .finally(function () {
+            busy = false;
+            suggestBtn.disabled = false;
+          });
       });
 
-      pushBtn.addEventListener('click', function () {        if (pushBtn.disabled) return;
+      pushBtn.addEventListener('click', function () {
+        if (pushBtn.disabled || isBusy()) return;
         pushBtn.disabled = true;
+        pushRunning = true;
         var body = new URLSearchParams();
         body.set('time', pushTime.value);
         body.set('title', pushTitle.value);

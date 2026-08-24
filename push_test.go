@@ -183,6 +183,40 @@ func TestUploadPushConflict(t *testing.T) {
 	require.Empty(t, st.Error)
 }
 
+func TestUploadPushKeepsFilesAddedDuringJob(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o644))
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "t"}))
+	entered := make(chan struct{})
+	var once sync.Once
+	store := &fakeStore{
+		putBlock: make(chan struct{}),
+		putHook: func(string) {
+			once.Do(func() {
+				_ = os.WriteFile(filepath.Join(dir, "extra.txt"), []byte("x"), 0o644)
+				close(entered)
+			})
+		},
+	}
+	h := NewServer(cfg, store).Handler()
+	cookie := loginCookie(t, h)
+
+	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("push job did not start")
+	}
+	close(store.putBlock)
+	st := awaitPushDone(t, h, cookie)
+	require.Empty(t, st.Error)
+
+	_, err := os.Stat(filepath.Join(dir, "extra.txt"))
+	require.NoError(t, err)
+	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "t"}, loadWorkspaceState(dir))
+}
+
 func TestUploadPushFailureKeepsFiles(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("aaa"), 0o644))

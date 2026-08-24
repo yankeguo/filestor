@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -148,9 +147,7 @@ func (s *Server) handleUploadPush(w http.ResponseWriter, r *http.Request) {
 	s.push = job
 	s.pushMu.Unlock()
 	go s.runPush(job, dir, prefix, names)
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "prefix": prefix + "/"})
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "prefix": prefix + "/"})
 }
 
 func (s *Server) handleUploadPushStatus(w http.ResponseWriter, r *http.Request) {
@@ -161,10 +158,7 @@ func (s *Server) handleUploadPushStatus(w http.ResponseWriter, r *http.Request) 
 	if job != nil {
 		st = job.snapshot()
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if err := json.NewEncoder(w).Encode(st); err != nil {
-		log.Println("encode push status:", err)
-	}
+	writeJSON(w, http.StatusOK, st)
 }
 
 // runPush uploads every staged file to OSS under prefix, removing each file
@@ -194,7 +188,7 @@ func (s *Server) runPush(job *pushJob, dir, prefix string, names []string) {
 		_ = os.Remove(filepath.Join(dir, name))
 		job.update(func(st *pushState) { st.Done++ })
 	}
-	clearWorkspaceState(dir)
+	clearWorkspaceStateIfEmpty(dir)
 	job.update(func(st *pushState) {
 		st.Running = false
 		st.Current = ""

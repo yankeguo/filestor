@@ -85,6 +85,7 @@ func TestUploadPageAndList(t *testing.T) {
 	require.NotContains(t, body, "subdir")
 	require.Contains(t, body, `href="/upload"`)
 	require.Contains(t, body, "nav-link active")
+	require.NotContains(t, body, "id=\"suggest-btn\"")
 
 	req = httptest.NewRequest(http.MethodGet, "/upload/files", nil)
 	req.AddCookie(cookie)
@@ -305,4 +306,17 @@ func TestUploadStateLifecycle(t *testing.T) {
 	require.Equal(t, "2026-08-24T06:59", loadWorkspaceState(dir).Time)
 	deleteUploadFile(t, h, cookie, "b.txt")
 	require.Equal(t, workspaceState{}, loadWorkspaceState(dir))
+}
+
+func TestUploadPageShowsSuggestWhenLLMConfigured(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	cfg.LLM = LLMConfig{URL: "http://127.0.0.1:1/", Model: "m"}
+	h := NewServer(cfg, &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/upload", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `id="suggest-btn"`)
 }

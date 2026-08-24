@@ -98,8 +98,16 @@ func (s *ossStore) SignGetURL(key string, ttl time.Duration) (string, error) {
 
 func attachmentDisposition(key string) string {
 	name := path.Base(key)
+	name = strings.Map(func(r rune) rune {
+		switch r {
+		case 0, '"', '\\', '\r', '\n':
+			return -1
+		default:
+			return r
+		}
+	}, name)
 	if name == "" || name == "." || name == "/" {
 		name = "download"
 	}
-	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, strings.ReplaceAll(name, `"`, ""), url.PathEscape(name))
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, name, url.PathEscape(name))
 }

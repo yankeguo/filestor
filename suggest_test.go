@@ -162,7 +162,43 @@ func TestUploadSuggestNoTitle(t *testing.T) {
 	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
 	h := NewServer(cfg, &fakeStore{}).Handler()
 	cookie := loginCookie(t, h)
-	require.Equal(t, http.StatusBadGateway, postSuggest(t, h, cookie).Code)
+	rec := postSuggest(t, h, cookie)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.Equal(t, "suggest failed\n", rec.Body.String())
+}
+
+func TestUnmarshalToolArgs(t *testing.T) {
+	var args struct {
+		Name  string `json:"name"`
+		Title string `json:"title"`
+	}
+	require.NoError(t, unmarshalToolArgs(json.RawMessage(`{"title":"from-object"}`), &args))
+	require.Equal(t, "from-object", args.Title)
+
+	args = struct {
+		Name  string `json:"name"`
+		Title string `json:"title"`
+	}{}
+	require.NoError(t, unmarshalToolArgs(json.RawMessage(`"{\"name\":\"a.txt\"}"`), &args))
+	require.Equal(t, "a.txt", args.Name)
+
+	require.Error(t, unmarshalToolArgs(nil, &args))
+	require.Error(t, unmarshalToolArgs(json.RawMessage(`null`), &args))
+}
+
+func TestUploadSuggestObjectArguments(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("hi"), 0o644))
+	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":{"title":"from-object"}}}]}}]}`
+	})
+	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	h := NewServer(cfg, &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
+	rec := postSuggest(t, h, cookie)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "from-object", loadWorkspaceState(cfg.Upload.Workspace).Title)
 }
 
 func TestReadWorkspaceText(t *testing.T) {

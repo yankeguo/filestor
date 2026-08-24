@@ -90,11 +90,14 @@ func buildBrowseData(prefix string, page ListPage) browseData {
 		Prefix:     prefix,
 		NextMarker: page.NextMarker,
 	}
-	if page.IsTruncated && data.NextMarker == "" {
-		data.NextMarker = ""
-	}
 	if !page.IsTruncated {
 		data.NextMarker = ""
+	} else if data.NextMarker == "" {
+		if n := len(page.Objects); n > 0 {
+			data.NextMarker = page.Objects[n-1].Key
+		} else if n := len(page.Prefixes); n > 0 {
+			data.NextMarker = page.Prefixes[n-1]
+		}
 	}
 	for _, p := range page.Prefixes {
 		name := entryName(p, prefix)

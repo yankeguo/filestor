@@ -159,6 +159,16 @@ func TestDownloadRejectsEmptyKey(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func TestDownloadRejectsInvalidKey(t *testing.T) {
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/download?key="+url.QueryEscape("a.txt\r\nX-Injected: yes"), nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 func TestDownloadRequiresLogin(t *testing.T) {
 	h := NewServer(testCfg(), &fakeStore{}).Handler()
 	req := httptest.NewRequest(http.MethodGet, "/download?key=a.txt", nil)
@@ -202,8 +212,37 @@ func TestFormatSize(t *testing.T) {
 	require.Equal(t, "1.5 KB", formatSize(1536))
 }
 
+func TestBuildBrowseDataNextMarker(t *testing.T) {
+	d := buildBrowseData("", ListPage{
+		IsTruncated: true,
+		NextMarker:  "x",
+		Objects:     []ObjectInfo{{Key: "a.txt"}},
+	})
+	require.Equal(t, "x", d.NextMarker)
+
+	d = buildBrowseData("", ListPage{IsTruncated: false, NextMarker: "x"})
+	require.Equal(t, "", d.NextMarker)
+
+	d = buildBrowseData("", ListPage{
+		IsTruncated: true,
+		Objects:     []ObjectInfo{{Key: "a.txt"}, {Key: "b.txt"}},
+	})
+	require.Equal(t, "b.txt", d.NextMarker)
+
+	d = buildBrowseData("", ListPage{
+		IsTruncated: true,
+		Prefixes:    []string{"docs/", "img/"},
+	})
+	require.Equal(t, "img/", d.NextMarker)
+}
+
 func TestAttachmentDisposition(t *testing.T) {
 	d := attachmentDisposition(`dir/"q".txt`)
 	require.Contains(t, d, `filename="q.txt"`)
 	require.Contains(t, d, "filename*=UTF-8''")
+
+	d = attachmentDisposition("dir/evil\r\nX.txt")
+	require.NotContains(t, d, "\r")
+	require.NotContains(t, d, "\n")
+	require.Contains(t, d, `filename="evilX.txt"`)
 }

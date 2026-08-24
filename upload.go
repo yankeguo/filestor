@@ -32,11 +32,12 @@ type workspaceFile struct {
 }
 
 type uploadPageData struct {
-	Nav       string
-	Workspace string
-	Files     []workspaceFile
-	Time      string
-	Title     string
+	Nav        string
+	Workspace  string
+	Files      []workspaceFile
+	Time       string
+	Title      string
+	CanSuggest bool
 }
 
 // workspaceState is the draft push options persisted under a dot-prefixed
@@ -173,6 +174,24 @@ func clearWorkspaceState(dir string) {
 	_ = os.Remove(filepath.Join(dir, uploadStateFile))
 }
 
+// pinWorkspaceState writes the first-file draft (time=now, title="") only when
+// no state file exists yet.
+func pinWorkspaceState(dir string) {
+	if _, err := os.Stat(filepath.Join(dir, uploadStateFile)); !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err := saveWorkspaceState(dir, workspaceState{Time: time.Now().Format(pushTimeLayout)}); err != nil {
+		log.Println("save workspace state:", err)
+	}
+}
+
+func clearWorkspaceStateIfEmpty(dir string) {
+	files, err := listWorkspaceFiles(dir)
+	if err == nil && len(files) == 0 {
+		clearWorkspaceState(dir)
+	}
+}
+
 func (s *Server) handleUploadPage(w http.ResponseWriter, r *http.Request) {
 	dir := s.workspaceDir()
 	files, err := listWorkspaceFiles(dir)
@@ -183,11 +202,12 @@ func (s *Server) handleUploadPage(w http.ResponseWriter, r *http.Request) {
 	}
 	st := loadWorkspaceState(dir)
 	s.render(w, "upload.html", uploadPageData{
-		Nav:       "upload",
-		Workspace: dir,
-		Files:     files,
-		Time:      st.Time,
-		Title:     st.Title,
+		Nav:        "upload",
+		Workspace:  dir,
+		Files:      files,
+		Time:       st.Time,
+		Title:      st.Title,
+		CanSuggest: s.Config != nil && s.Config.LLM.URL != "",
 	})
 }
 
@@ -201,10 +221,7 @@ func (s *Server) handleUploadList(w http.ResponseWriter, r *http.Request) {
 	if files == nil {
 		files = []workspaceFile{}
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if err := json.NewEncoder(w).Encode(map[string]any{"files": files}); err != nil {
-		log.Println("encode workspace list:", err)
-	}
+	writeJSON(w, http.StatusOK, map[string]any{"files": files})
 }
 
 func (s *Server) handleUploadAdd(w http.ResponseWriter, r *http.Request) {
@@ -218,9 +235,11 @@ func (s *Server) handleUploadAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad multipart", http.StatusBadRequest)
 		return
 	}
-	if r.MultipartForm != nil {
-		defer r.MultipartForm.RemoveAll()
+	if r.MultipartForm == nil {
+		http.Error(w, "missing file", http.StatusBadRequest)
+		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	headers := r.MultipartForm.File[uploadFilesField]
 	if len(headers) == 0 {
 		http.Error(w, "missing file", http.StatusBadRequest)
@@ -245,15 +264,10 @@ func (s *Server) handleUploadAdd(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "save failed", http.StatusInternalServerError)
 			return
 		}
+		// Pin as soon as the first file lands, even if a later part fails.
+		pinWorkspaceState(dir)
 	}
-	// Pin the push datetime to the moment the first file landed in staging.
-	if _, err := os.Stat(filepath.Join(dir, uploadStateFile)); os.IsNotExist(err) {
-		if err := saveWorkspaceState(dir, workspaceState{Time: time.Now().Format(pushTimeLayout)}); err != nil {
-			log.Println("save workspace state:", err)
-		}
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = w.Write([]byte(`{"ok":true}`))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleUploadDelete(w http.ResponseWriter, r *http.Request) {
@@ -262,8 +276,9 @@ func (s *Server) handleUploadDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid file name", http.StatusBadRequest)
 		return
 	}
-	if err := removeWorkspaceFile(s.workspaceDir(), name); err != nil {
-		if os.IsNotExist(err) {
+	dir := s.workspaceDir()
+	if err := removeWorkspaceFile(dir, name); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -271,13 +286,8 @@ func (s *Server) handleUploadDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
-	// Staging is empty again: drop the pinned push options.
-	dir := s.workspaceDir()
-	if files, err := listWorkspaceFiles(dir); err == nil && len(files) == 0 {
-		clearWorkspaceState(dir)
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = w.Write([]byte(`{"ok":true}`))
+	clearWorkspaceStateIfEmpty(dir)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // handleUploadState persists the draft push time/title while files are staged.
@@ -310,6 +320,5 @@ func (s *Server) handleUploadState(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = w.Write([]byte(`{"ok":true}`))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

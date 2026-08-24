@@ -37,8 +37,8 @@ type UploadConfig struct {
 	Workspace string `yaml:"workspace"`
 }
 
-// LLMConfig describes an OpenAI-compatible endpoint for future LLM calls.
-// All fields are optional; url and model must be set together.
+// LLMConfig describes an optional OpenAI-compatible endpoint used by
+// POST /upload/suggest. url and model must be set together.
 type LLMConfig struct {
 	URL     string            `yaml:"url"`
 	Model   string            `yaml:"model"`
@@ -63,7 +63,7 @@ func loadConfig(path string) (*Config, error) {
 
 func (c *Config) validate() error {
 	if c == nil {
-		return fmt.Errorf("config: admin.username is required")
+		return fmt.Errorf("config is nil")
 	}
 	c.Admin.Username = strings.TrimSpace(c.Admin.Username)
 	if c.Admin.Username == "" {

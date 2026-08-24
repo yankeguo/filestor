@@ -62,8 +62,8 @@ type chatToolCall struct {
 }
 
 type chatFunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
 }
 
 type chatTool struct {
@@ -159,11 +159,10 @@ func (s *Server) handleUploadSuggest(w http.ResponseWriter, r *http.Request) {
 	title, err := ag.run(r.Context(), files)
 	if err != nil {
 		log.Println("suggest:", err)
-		http.Error(w, "suggest failed: "+err.Error(), http.StatusBadGateway)
+		http.Error(w, "suggest failed", http.StatusBadGateway)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "title": title})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "title": title})
 }
 
 func (a *suggestAgent) run(ctx context.Context, files []workspaceFile) (string, error) {
@@ -213,7 +212,7 @@ func (a *suggestAgent) runTool(tc chatToolCall) []chatMessage {
 		Name  string `json:"name"`
 		Title string `json:"title"`
 	}
-	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+	if err := unmarshalToolArgs(tc.Function.Arguments, &args); err != nil {
 		return reply("invalid arguments: " + err.Error())
 	}
 	switch tc.Function.Name {
@@ -289,6 +288,26 @@ func (a *suggestAgent) chat(ctx context.Context, messages []chatMessage) (*chatR
 	return &out, nil
 }
 
+// unmarshalToolArgs accepts both a JSON object and a JSON string containing
+// an object (OpenAI-compatible APIs disagree on tool-call argument encoding).
+func unmarshalToolArgs(raw json.RawMessage, dest any) error {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return errors.New("empty")
+	}
+	if raw[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return err
+		}
+		raw = bytes.TrimSpace([]byte(s))
+		if len(raw) == 0 {
+			return errors.New("empty")
+		}
+	}
+	return json.Unmarshal(raw, dest)
+}
+
 // readWorkspaceText reads a staged file as text: NUL-sniffed, capped at 64 KiB.
 func readWorkspaceText(dir, name string) (string, error) {
 	name, err := sanitizeWorkspaceName(name)
@@ -338,9 +357,17 @@ func readWorkspaceImage(dir, name string) (string, []byte, error) {
 	if info.Size() > suggestImageMaxBytes {
 		return "", nil, fmt.Errorf("image too large (%s, max 8 MiB)", formatSize(info.Size()))
 	}
-	data, err := os.ReadFile(filepath.Join(dir, name))
+	f, err := os.Open(filepath.Join(dir, name))
 	if err != nil {
 		return "", nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, suggestImageMaxBytes+1))
+	if err != nil {
+		return "", nil, err
+	}
+	if int64(len(data)) > suggestImageMaxBytes {
+		return "", nil, fmt.Errorf("image too large (%s, max 8 MiB)", formatSize(int64(len(data))))
 	}
 	return mime, data, nil
 }
