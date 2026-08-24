@@ -32,6 +32,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.handleRoot)
 	mux.Handle("GET /browse", s.requireAuth(http.HandlerFunc(s.handleBrowse)))
 	mux.Handle("GET /download", s.requireAuth(http.HandlerFunc(s.handleDownload)))
+	mux.Handle("GET /upload", s.requireAuth(http.HandlerFunc(s.handleUploadPage)))
+	mux.Handle("GET /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadList)))
+	mux.Handle("POST /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadAdd)))
+	mux.Handle("DELETE /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadDelete)))
 	return withSecurityHeaders(mux)
 }
 

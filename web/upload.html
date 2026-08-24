@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>filestor — upload</title>
+  {{template "head" .}}
+</head>
+<body>
+  {{template "nav" .}}
+  <main class="container py-4">
+    <p class="text-secondary mb-3">Staging files in <code>{{.Workspace}}</code>. They are not sent to OSS yet.</p>
+    <p id="status" class="text-danger small mb-3 d-none"></p>
+    <div id="drop" class="card border mb-3">
+      <div class="card-body text-center py-5">
+        <i class="bi bi-cloud-arrow-up d-block mb-2" style="font-size:2rem"></i>
+        <p class="mb-2">Drop files here or</p>
+        <label class="btn btn-outline-primary mb-0">
+          <i class="bi bi-plus-lg"></i> Choose files
+          <input id="picker" type="file" multiple hidden>
+        </label>
+      </div>
+    </div>
+    <div class="card">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th class="text-end">Size</th>
+              <th class="text-nowrap">Modified</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="files">
+            {{if .Files}}
+              {{range .Files}}
+              <tr>
+                <td><i class="bi bi-file-earmark"></i> {{.Name}}</td>
+                <td class="text-end text-secondary text-nowrap">{{.Size}}</td>
+                <td class="text-secondary text-nowrap">{{.Modified}}</td>
+                <td class="text-end">
+                  <button type="button" class="btn btn-sm btn-outline-danger" data-name="{{.Name}}">
+                    <i class="bi bi-trash"></i> Delete
+                  </button>
+                </td>
+              </tr>
+              {{end}}
+            {{else}}
+            <tr>
+              <td colspan="4" class="text-secondary">No files</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+  <script>
+    (function () {
+      var filesEl = document.getElementById('files');
+      var drop = document.getElementById('drop');
+      var picker = document.getElementById('picker');
+      var statusEl = document.getElementById('status');
+      var busy = false;
+
+      function showError(msg) {
+        if (!msg) {
+          statusEl.classList.add('d-none');
+          statusEl.textContent = '';
+          return;
+        }
+        statusEl.textContent = msg;
+        statusEl.classList.remove('d-none');
+      }
+
+      function goLoginIfNeeded(res) {
+        if (res.redirected && res.url.indexOf('/login') !== -1) {
+          location.href = '/login';
+          return true;
+        }
+        return false;
+      }
+
+      function render(files) {
+        filesEl.replaceChildren();
+        if (!files || !files.length) {
+          var empty = document.createElement('tr');
+          var td = document.createElement('td');
+          td.colSpan = 4;
+          td.className = 'text-secondary';
+          td.textContent = 'No files';
+          empty.appendChild(td);
+          filesEl.appendChild(empty);
+          return;
+        }
+        files.forEach(function (f) {
+          var tr = document.createElement('tr');
+          var nameTd = document.createElement('td');
+          var icon = document.createElement('i');
+          icon.className = 'bi bi-file-earmark';
+          nameTd.appendChild(icon);
+          nameTd.appendChild(document.createTextNode(' ' + f.name));
+          var sizeTd = document.createElement('td');
+          sizeTd.className = 'text-end text-secondary text-nowrap';
+          sizeTd.textContent = f.size;
+          var modTd = document.createElement('td');
+          modTd.className = 'text-secondary text-nowrap';
+          modTd.textContent = f.modified;
+          var actTd = document.createElement('td');
+          actTd.className = 'text-end';
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-sm btn-outline-danger';
+          btn.setAttribute('data-name', f.name);
+          btn.innerHTML = '<i class="bi bi-trash"></i> Delete';
+          actTd.appendChild(btn);
+          tr.appendChild(nameTd);
+          tr.appendChild(sizeTd);
+          tr.appendChild(modTd);
+          tr.appendChild(actTd);
+          filesEl.appendChild(tr);
+        });
+      }
+
+      function refresh() {
+        return fetch('/upload/files', { credentials: 'same-origin' }).then(function (res) {
+          if (goLoginIfNeeded(res)) return;
+          if (!res.ok) throw new Error('list failed');
+          return res.json();
+        }).then(function (data) {
+          if (!data) return;
+          showError('');
+          render(data.files || []);
+        }).catch(function () {
+          showError('Could not list workspace files.');
+        });
+      }
+
+      function uploadFiles(list) {
+        if (!list || !list.length || busy) return;
+        var fd = new FormData();
+        for (var i = 0; i < list.length; i++) fd.append('file', list[i]);
+        busy = true;
+        showError('');
+        fetch('/upload/files', { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (res) {
+          if (goLoginIfNeeded(res)) return;
+          if (!res.ok) throw new Error('upload failed');
+          return refresh();
+        }).catch(function () {
+          showError('Upload failed.');
+        }).finally(function () {
+          busy = false;
+          picker.value = '';
+        });
+      }
+
+      function deleteFile(name) {
+        if (!name || busy) return;
+        if (!confirm('Delete ' + name + '?')) return;
+        busy = true;
+        fetch('/upload/files?name=' + encodeURIComponent(name), {
+          method: 'DELETE',
+          credentials: 'same-origin'
+        }).then(function (res) {
+          if (goLoginIfNeeded(res)) return;
+          if (!res.ok) throw new Error('delete failed');
+          return refresh();
+        }).catch(function () {
+          showError('Delete failed.');
+        }).finally(function () { busy = false; });
+      }
+
+      picker.addEventListener('change', function () {
+        uploadFiles(picker.files);
+      });
+      drop.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        drop.classList.add('border-primary');
+      });
+      drop.addEventListener('dragleave', function () {
+        drop.classList.remove('border-primary');
+      });
+      drop.addEventListener('drop', function (e) {
+        e.preventDefault();
+        drop.classList.remove('border-primary');
+        uploadFiles(e.dataTransfer.files);
+      });
+      filesEl.addEventListener('click', function (e) {
+        var btn = e.target.closest('button[data-name]');
+        if (btn) deleteFile(btn.getAttribute('data-name'));
+      });
+      refresh();
+      setInterval(refresh, 1000);
+    })();
+  </script>
+</body>
+</html>

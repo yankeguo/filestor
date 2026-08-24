@@ -5,10 +5,11 @@ Cookie-authenticated browser for an Aliyun OSS bucket. Listing goes through this
 ## Features
 
 - Standard `net/http` server
-- YAML config: `admin.{username,password}` and `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}`
+- YAML config: `admin.{username,password}`, `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}`, optional `upload.workspace`
 - Cookie login (HMAC, HttpOnly, SameSite=Lax)
 - Prefix listing treated as folders (`Delimiter=/`)
 - `GET /download` 302s to a 5-minute OSS GET URL (`Content-Disposition: attachment`)
+- Local upload workspace at `/upload` (list, drag-and-drop add, delete). Files stay on disk; they are not sent to OSS yet.
 - SIGINT/SIGTERM stops accepting connections and waits for in-flight requests; a second signal terminates
 
 ## Quick start
@@ -24,6 +25,7 @@ Or with Docker:
 ```bash
 docker run --rm -p 8080:8080 \
   -v "$PWD/config.yaml:/config.yaml:ro" \
+  -v "$PWD/upload-workspace:/upload-workspace" \
   ghcr.io/yankeguo/filestor:latest
 ```
 
@@ -50,9 +52,11 @@ aliyun:
     bucket: example-bucket
     access_key_id: REPLACE_ME
     access_key_secret: REPLACE_ME
+upload:
+  workspace: upload-workspace
 ```
 
-All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}` are required. Field names follow the official Aliyun OSS API (`access_key_id` / `access_key_secret` / `endpoint`), not AWS/boto3 names. `endpoint` may omit `https://`; it is added on load. Do not commit `config.yaml`.
+All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}` are required. Field names follow the official Aliyun OSS API (`access_key_id` / `access_key_secret` / `endpoint`), not AWS/boto3 names. `endpoint` may omit `https://`; it is added on load. `upload.workspace` defaults to `upload-workspace` (relative to the process working directory; in the container that is `/upload-workspace`). Do not commit `config.yaml`.
 
 ## Auth
 
@@ -72,8 +76,12 @@ All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,acce
 | `POST` | `/logout` | cookie | Clear session, 302 to `/login` |
 | `GET` | `/browse?prefix=&marker=` | cookie | List current prefix (`Delimiter=/`, 200 keys per page) |
 | `GET` | `/download?key=` | cookie | Sign a 5-minute GET URL and 302 to OSS |
+| `GET` | `/upload` | cookie | Local workspace page (polls the directory every 1s) |
+| `GET` | `/upload/files` | cookie | JSON list of regular files in the workspace |
+| `POST` | `/upload/files` | cookie | Multipart field `file` (one or more); writes into the workspace |
+| `DELETE` | `/upload/files?name=` | cookie | Delete one workspace file |
 
-Folder rows are common prefixes; files skip the placeholder object whose key equals the current prefix. There is no upload, delete, or search.
+Folder rows are common prefixes; files skip the placeholder object whose key equals the current prefix. `/upload` only manages a local staging directory (flat files, no subfolders, names are basenames). It does not PUT to OSS. There is no search.
 
 ## Docker / GHCR
 

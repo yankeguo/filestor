@@ -24,6 +24,7 @@ type fileEntry struct {
 }
 
 type browseData struct {
+	Nav        string
 	Crumbs     []crumb
 	Parent     string
 	HasParent  bool
@@ -82,6 +83,7 @@ func buildBrowseData(prefix string, page ListPage) browseData {
 	prefix = normalizePrefix(prefix)
 	parent, hasParent := parentPrefix(prefix)
 	data := browseData{
+		Nav:        "browse",
 		Crumbs:     breadcrumbs(prefix),
 		Parent:     parent,
 		HasParent:  hasParent,

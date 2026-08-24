@@ -7,3 +7,5 @@ aliyun:
     bucket: example-bucket
     access_key_id: REPLACE_ME
     access_key_secret: REPLACE_ME
+upload:
+  workspace: upload-workspace

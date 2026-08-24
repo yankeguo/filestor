@@ -4,4 +4,5 @@
 *.md
 *_test.go
 config.yaml
+upload-workspace
 LICENSE

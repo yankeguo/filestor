@@ -30,6 +30,9 @@ go.work.sum
 # local config with secrets
 /config.yaml
 
+# default local upload workspace
+/upload-workspace
+
 # Editor/IDE
 # .idea/
 # .vscode/

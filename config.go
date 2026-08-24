@@ -8,9 +8,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const defaultUploadWorkspace = "upload-workspace"
+
 type Config struct {
 	Admin  AdminConfig  `yaml:"admin"`
 	Aliyun AliyunConfig `yaml:"aliyun"`
+	Upload UploadConfig `yaml:"upload"`
 }
 
 type AdminConfig struct {
@@ -27,6 +30,10 @@ type OSSConfig struct {
 	Bucket          string `yaml:"bucket"`
 	AccessKeyID     string `yaml:"access_key_id"`
 	AccessKeySecret string `yaml:"access_key_secret"`
+}
+
+type UploadConfig struct {
+	Workspace string `yaml:"workspace"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -70,6 +77,10 @@ func (c *Config) validate() error {
 	}
 	if c.Aliyun.OSS.AccessKeySecret == "" {
 		return fmt.Errorf("config: aliyun.oss.access_key_secret is required")
+	}
+	c.Upload.Workspace = strings.TrimSpace(c.Upload.Workspace)
+	if c.Upload.Workspace == "" {
+		c.Upload.Workspace = defaultUploadWorkspace
 	}
 	return nil
 }

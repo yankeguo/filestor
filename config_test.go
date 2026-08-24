@@ -35,6 +35,16 @@ func TestLoadConfig(t *testing.T) {
 	require.Equal(t, "example-bucket", cfg.Aliyun.OSS.Bucket)
 	require.Equal(t, "ak", cfg.Aliyun.OSS.AccessKeyID)
 	require.Equal(t, "sk", cfg.Aliyun.OSS.AccessKeySecret)
+	require.Equal(t, defaultUploadWorkspace, cfg.Upload.Workspace)
+}
+
+func TestLoadConfigUploadWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(ossYAML()+"upload:\n  workspace: /var/filestor/staging\n"), 0o644))
+	cfg, err := loadConfig(path)
+	require.NoError(t, err)
+	require.Equal(t, "/var/filestor/staging", cfg.Upload.Workspace)
 }
 
 func TestLoadConfigTrimsUsername(t *testing.T) {

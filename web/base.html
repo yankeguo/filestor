@@ -12,8 +12,12 @@
 
 {{define "nav"}}
 <header class="navbar border-bottom">
-  <div class="container-fluid">
+  <div class="container-fluid gap-3">
     <a class="navbar-brand mb-0 h1" href="/"><i class="bi bi-folder2-open"></i> filestor</a>
+    <ul class="navbar-nav flex-row gap-3 me-auto">
+      <li class="nav-item"><a class="nav-link{{if eq .Nav "browse"}} active{{end}}" href="/browse"><i class="bi bi-folder2"></i> Browse</a></li>
+      <li class="nav-item"><a class="nav-link{{if eq .Nav "upload"}} active{{end}}" href="/upload"><i class="bi bi-cloud-arrow-up"></i> Upload</a></li>
+    </ul>
     <form method="post" action="/logout">
       <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="bi bi-box-arrow-right"></i> Sign out</button>
     </form>
