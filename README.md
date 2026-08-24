@@ -9,7 +9,7 @@ Cookie-authenticated browser for an Aliyun OSS bucket. Listing goes through this
 - Cookie login (HMAC, HttpOnly, SameSite=Lax)
 - Prefix listing treated as folders (`Delimiter=/`)
 - `GET /download` 302s to a 5-minute OSS GET URL (`Content-Disposition: attachment`)
-- Local upload workspace at `/upload` (list, drag-and-drop add, delete). Files stay on disk until pushed.
+- Local upload workspace at `/upload` (list, drag-and-drop add with per-file progress, delete). Files stay on disk until pushed.
 - One-click push of staged files to OSS under `YYYY/MM/YYYYMMDDhhmm-TITLE/` (async job, one at a time, live progress on the page).
 - SIGINT/SIGTERM stops accepting connections and waits for in-flight requests; a second signal terminates
 

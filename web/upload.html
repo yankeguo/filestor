@@ -43,7 +43,13 @@
           <i class="bi bi-plus-lg"></i> Choose files
           <input id="picker" type="file" multiple hidden>
         </label>
-        <p class="text-secondary small mt-3 mb-0">Flat files only — no folders, no hidden files starting with <code>.</code></p>
+        <p class="text-secondary small mt-3 mb-0">Flat files only — no folders, no hidden files starting with <code>.</code>; max 2 GiB per file.</p>
+        <div id="stage-box" class="mt-3 d-none text-start">
+          <div class="progress" role="progressbar">
+            <div id="stage-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div>
+          </div>
+          <p id="stage-status" class="small text-secondary mt-1 mb-0"></p>
+        </div>
       </div>
     </div>
     <div class="card">
@@ -93,7 +99,23 @@
       var pushBox = document.getElementById('push-box');
       var pushBar = document.getElementById('push-bar');
       var pushStatus = document.getElementById('push-status');
+      var stageBox = document.getElementById('stage-box');
+      var stageBar = document.getElementById('stage-bar');
+      var stageStatus = document.getElementById('stage-status');
       var busy = false;
+      var stageMax = 2 * 1024 * 1024 * 1024;
+
+      window.addEventListener('beforeunload', function (e) {
+        if (busy) e.preventDefault();
+      });
+
+      function fmtBytes(n) {
+        if (n < 1024) return n + ' B';
+        var units = ['KiB', 'MiB', 'GiB'];
+        var u = -1;
+        do { n /= 1024; u++; } while (n >= 1024 && u < units.length - 1);
+        return n.toFixed(1) + ' ' + units[u];
+      }
 
       function pad2(n) { return (n < 10 ? '0' : '') + n; }
       (function () {
@@ -168,47 +190,123 @@
           return res.json();
         }).then(function (data) {
           if (!data) return;
-          showError('');
           render(data.files || []);
+          // Only clear a stale list error; keep upload/push messages visible.
+          if (statusEl.textContent === 'Could not list workspace files.') showError('');
         }).catch(function () {
           showError('Could not list workspace files.');
         });
       }
 
+      // Upload one file via XHR so upload progress events are available.
+      function uploadOne(file, onprogress) {
+        return new Promise(function (resolve, reject) {
+          var fd = new FormData();
+          fd.append('file', file);
+          var xhr = new XMLHttpRequest();
+          xhr.open('POST', '/upload/files');
+          xhr.upload.onprogress = function (e) {
+            if (e.lengthComputable) onprogress(e.loaded, e.total);
+          };
+          xhr.onload = function () {
+            if (xhr.responseURL && xhr.responseURL.indexOf('/login') !== -1) {
+              location.href = '/login';
+              return;
+            }
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve();
+            } else if (xhr.status === 413) {
+              reject(new Error('too large (max 2 GiB)'));
+            } else {
+              reject(new Error((xhr.responseText || 'HTTP ' + xhr.status).trim()));
+            }
+          };
+          xhr.onerror = function () { reject(new Error('network error')); };
+          xhr.send(fd);
+        });
+      }
+
+      function stageProgress(doneBytes, loaded, totalBytes, idx, count, name) {
+        var cur = Math.min(doneBytes + loaded, totalBytes);
+        var pct = totalBytes > 0 ? Math.floor(cur * 100 / totalBytes) : 100;
+        stageBar.style.width = pct + '%';
+        stageBar.textContent = pct + '%';
+        stageStatus.textContent = 'Uploading ' + idx + '/' + count + ': ' + name +
+          ' (' + fmtBytes(cur) + ' / ' + fmtBytes(totalBytes) + ')';
+      }
+
+      // Sequential queue: one POST per file, so a failure only affects its own
+      // file and progress stays accurate for very large files.
       function uploadFiles(list, dirRejected) {
-        if (!list || busy) return;
+        if (!list) return;
+        if (busy) {
+          showError('Another operation is in progress, try again in a moment.');
+          return;
+        }
         var files = [];
         var rejected = !!dirRejected;
+        var tooLarge = [];
         for (var i = 0; i < list.length; i++) {
           var f = list[i];
           var name = f.name || '';
           // Single flat layer only: no folders, no dot-prefixed hidden files.
           if (!name || name.charAt(0) === '.' || f.webkitRelativePath) {
             rejected = true;
-            continue;
+          } else if (f.size > stageMax) {
+            tooLarge.push(name);
+          } else {
+            files.push(f);
           }
-          files.push(f);
         }
         if (!files.length) {
           if (rejected) showError('Folders and hidden files (names starting with ".") are not allowed.');
+          if (tooLarge.length) showError('Over 2 GiB, skipped: ' + tooLarge.join(', '));
           picker.value = '';
           return;
         }
-        var fd = new FormData();
-        for (var j = 0; j < files.length; j++) fd.append('file', files[j]);
         busy = true;
-        fetch('/upload/files', { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (res) {
-          if (goLoginIfNeeded(res)) return;
-          if (!res.ok) throw new Error('upload failed');
-          return refresh();
-        }).then(function () {
-          if (rejected) showError('Folders and hidden files (names starting with ".") were skipped.');
-        }).catch(function () {
-          showError('Upload failed.');
-        }).finally(function () {
+        showError('');
+        stageBox.classList.remove('d-none');
+        var totalBytes = 0;
+        files.forEach(function (f) { totalBytes += f.size; });
+        var doneBytes = 0;
+        var failed = [];
+        var idx = 0;
+        function finish() {
           busy = false;
           picker.value = '';
-        });
+          stageBar.classList.remove('progress-bar-animated');
+          stageBar.style.width = '100%';
+          stageBar.textContent = '100%';
+          stageStatus.textContent = 'Staged ' + (files.length - failed.length) + '/' + files.length + ' file(s).';
+          refresh();
+          var msgs = [];
+          if (failed.length) msgs.push('Failed: ' + failed.join('; '));
+          if (rejected) msgs.push('Folders and hidden files were skipped.');
+          if (tooLarge.length) msgs.push('Over 2 GiB, skipped: ' + tooLarge.join(', '));
+          if (msgs.length) showError(msgs.join(' '));
+        }
+        function next() {
+          if (idx >= files.length) {
+            finish();
+            return;
+          }
+          var f = files[idx];
+          var base = doneBytes;
+          idx++;
+          stageProgress(base, 0, totalBytes, idx, files.length, f.name);
+          uploadOne(f, function (loaded) {
+            stageProgress(base, loaded, totalBytes, idx, files.length, f.name);
+          }).then(function () {
+            doneBytes += f.size;
+            refresh();
+            next();
+          }).catch(function (e) {
+            failed.push(f.name + ' (' + e.message + ')');
+            next();
+          });
+        }
+        next();
       }
 
       function deleteFile(name) {
