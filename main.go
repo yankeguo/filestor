@@ -25,7 +25,7 @@ func main() {
 	}()
 	defer rg.Guard(&err)
 
-	configPath := envOr("FILESTOR_CONFIG", "config.yml")
+	configPath := envOr("FILESTOR_CONFIG", "config.yaml")
 	listen := envOr("FILESTOR_LISTEN", ":8080")
 	flag.StringVar(&configPath, "config", configPath, "path to yaml config")
 	flag.StringVar(&listen, "listen", listen, "http listen address")

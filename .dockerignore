@@ -3,6 +3,5 @@
 .gitignore
 *.md
 *_test.go
-config.yml
 config.yaml
 LICENSE

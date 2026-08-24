@@ -24,7 +24,7 @@ aliyun:
 
 func TestLoadConfig(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yml")
+	path := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(ossYAML()), 0o644))
 
 	cfg, err := loadConfig(path)
@@ -39,7 +39,7 @@ func TestLoadConfig(t *testing.T) {
 
 func TestLoadConfigTrimsUsername(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yml")
+	path := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`
 admin:
   username: '  admin  '
@@ -58,7 +58,7 @@ aliyun:
 
 func TestLoadConfigRejectsMissingAdmin(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yml")
+	path := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("admin:\n  username: admin\n"), 0o644))
 	_, err := loadConfig(path)
 	require.Error(t, err)
@@ -72,7 +72,7 @@ func TestLoadConfigRejectsMissingAdmin(t *testing.T) {
 
 func TestLoadConfigRejectsMissingOSS(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yml")
+	path := filepath.Join(dir, "config.yaml")
 	cases := []struct {
 		yaml string
 		want string

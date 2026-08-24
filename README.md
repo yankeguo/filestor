@@ -5,16 +5,16 @@ Cookie-authenticated browser for an Aliyun OSS bucket. Listing goes through this
 ## Quick start
 
 ```bash
-cp config.example.yml config.yml
+cp config.example.yaml config.yaml
 # edit admin credentials and aliyun.oss.*
-go run . -config config.yml -listen :8080
+go run . -config config.yaml -listen :8080
 ```
 
 Or with Docker:
 
 ```bash
 docker run --rm -p 8080:8080 \
-  -v "$PWD/config.yml:/config.yml:ro" \
+  -v "$PWD/config.yaml:/config.yaml:ro" \
   ghcr.io/yankeguo/filestor:latest
 ```
 
@@ -24,8 +24,10 @@ Open `http://127.0.0.1:8080`. Unauthenticated visits redirect to `/login`. After
 
 | Flag | Environment | Default | Meaning |
 |---|---|---|---|
-| `-config` | `FILESTOR_CONFIG` | `config.yml` | YAML config path |
+| `-config` | `FILESTOR_CONFIG` | `config.yaml` | YAML config path |
 | `-listen` | `FILESTOR_LISTEN` | `:8080` | HTTP listen address |
+
+The container image sets `FILESTOR_CONFIG=/config.yaml`.
 
 ## Config
 
@@ -41,7 +43,7 @@ aliyun:
     access_key_secret: REPLACE_ME
 ```
 
-All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}` are required. `endpoint` may omit `https://`; it is added on load. Do not commit `config.yml`.
+All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}` are required. `endpoint` may omit `https://`; it is added on load. Do not commit `config.yaml`.
 
 ## Auth
 
