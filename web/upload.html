@@ -19,6 +19,7 @@
           <i class="bi bi-plus-lg"></i> Choose files
           <input id="picker" type="file" multiple hidden>
         </label>
+        <p class="text-secondary small mt-3 mb-0">Flat files only — no folders, no hidden files starting with <code>.</code></p>
       </div>
     </div>
     <div class="card">
@@ -137,16 +138,34 @@
         });
       }
 
-      function uploadFiles(list) {
-        if (!list || !list.length || busy) return;
+      function uploadFiles(list, dirRejected) {
+        if (!list || busy) return;
+        var files = [];
+        var rejected = !!dirRejected;
+        for (var i = 0; i < list.length; i++) {
+          var f = list[i];
+          var name = f.name || '';
+          // Single flat layer only: no folders, no dot-prefixed hidden files.
+          if (!name || name.charAt(0) === '.' || f.webkitRelativePath) {
+            rejected = true;
+            continue;
+          }
+          files.push(f);
+        }
+        if (!files.length) {
+          if (rejected) showError('Folders and hidden files (names starting with ".") are not allowed.');
+          picker.value = '';
+          return;
+        }
         var fd = new FormData();
-        for (var i = 0; i < list.length; i++) fd.append('file', list[i]);
+        for (var j = 0; j < files.length; j++) fd.append('file', files[j]);
         busy = true;
-        showError('');
         fetch('/upload/files', { method: 'POST', body: fd, credentials: 'same-origin' }).then(function (res) {
           if (goLoginIfNeeded(res)) return;
           if (!res.ok) throw new Error('upload failed');
           return refresh();
+        }).then(function () {
+          if (rejected) showError('Folders and hidden files (names starting with ".") were skipped.');
         }).catch(function () {
           showError('Upload failed.');
         }).finally(function () {
@@ -184,7 +203,28 @@
       drop.addEventListener('drop', function (e) {
         e.preventDefault();
         drop.classList.remove('border-primary');
-        uploadFiles(e.dataTransfer.files);
+        var files = [];
+        var dirRejected = false;
+        var items = e.dataTransfer.items;
+        if (items && items.length) {
+          for (var i = 0; i < items.length; i++) {
+            var item = items[i];
+            if (item.kind !== 'file') {
+              dirRejected = true;
+              continue;
+            }
+            var entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+            if (entry && entry.isDirectory) {
+              dirRejected = true;
+              continue;
+            }
+            var f = item.getAsFile();
+            if (f) files.push(f);
+          }
+        } else {
+          files = Array.prototype.slice.call(e.dataTransfer.files || []);
+        }
+        uploadFiles(files, dirRejected);
       });
       filesEl.addEventListener('click', function (e) {
         var btn = e.target.closest('button[data-name]');

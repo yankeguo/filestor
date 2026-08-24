@@ -52,7 +52,8 @@ func sanitizeWorkspaceName(name string) (string, error) {
 	if strings.ContainsAny(name, `/\:`) || strings.ContainsRune(name, 0) {
 		return "", errInvalidWorkspaceName
 	}
-	if strings.HasPrefix(name, uploadTempPrefix) {
+	// Reject dot-prefixed hidden files (covers the .upload- temp prefix too).
+	if strings.HasPrefix(name, ".") {
 		return "", errInvalidWorkspaceName
 	}
 	return name, nil
@@ -68,7 +69,8 @@ func listWorkspaceFiles(dir string) ([]workspaceFile, error) {
 	}
 	out := make([]workspaceFile, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() || strings.HasPrefix(e.Name(), uploadTempPrefix) {
+		// Skip subdirectories and dot-prefixed hidden files (incl. .upload- temp files).
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		info, err := e.Info()

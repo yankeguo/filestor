@@ -81,7 +81,7 @@ All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,acce
 | `POST` | `/upload/files` | cookie | Multipart field `file` (one or more); writes into the workspace |
 | `DELETE` | `/upload/files?name=` | cookie | Delete one workspace file |
 
-Folder rows are common prefixes; files skip the placeholder object whose key equals the current prefix. `/upload` only manages a local staging directory (flat files, no subfolders, names are basenames). It does not PUT to OSS. There is no search.
+Folder rows are common prefixes; files skip the placeholder object whose key equals the current prefix. `/upload` only manages a local staging directory (flat files only: no folders, no hidden files starting with `.`; names are basenames). It does not PUT to OSS. There is no search.
 
 ## Docker / GHCR
 

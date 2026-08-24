@@ -35,6 +35,9 @@ func TestSanitizeWorkspaceName(t *testing.T) {
 		{".", "", true},
 		{"..", "", true},
 		{"../secret", "secret", false},
+		{".hidden", "", true},
+		{".gitignore", "", true},
+		{"dir/.hidden", "", true},
 		{uploadTempPrefix + "x", "", true},
 	}
 	for _, tc := range cases {
@@ -62,6 +65,7 @@ func TestUploadRequiresLogin(t *testing.T) {
 func TestUploadPageAndList(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "readme.txt"), []byte("hi"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, ".hidden"), []byte("hi"), 0o644))
 	require.NoError(t, os.Mkdir(filepath.Join(cfg.Upload.Workspace, "subdir"), 0o755))
 
 	h := NewServer(cfg, &fakeStore{}).Handler()
@@ -74,6 +78,7 @@ func TestUploadPageAndList(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	require.Contains(t, body, "readme.txt")
+	require.NotContains(t, body, ".hidden")
 	require.NotContains(t, body, "subdir")
 	require.Contains(t, body, `href="/upload"`)
 	require.Contains(t, body, "nav-link active")
@@ -177,6 +182,29 @@ func TestUploadDeleteMissing(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestUploadAddRejectsHidden(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	h := NewServer(cfg, &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	part, err := mw.CreateFormFile("file", ".gitignore")
+	require.NoError(t, err)
+	_, err = io.WriteString(part, "secret")
+	require.NoError(t, err)
+	require.NoError(t, mw.Close())
+
+	req := httptest.NewRequest(http.MethodPost, "/upload/files", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	_, err = os.Stat(filepath.Join(cfg.Upload.Workspace, ".gitignore"))
+	require.True(t, os.IsNotExist(err))
 }
 
 func TestUploadAddRejectsEmpty(t *testing.T) {
