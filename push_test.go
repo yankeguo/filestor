@@ -129,6 +129,7 @@ func TestUploadPushSuccess(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("aaa"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "b.txt"), []byte("bb"), 0o644))
+	require.NoError(t, saveWorkspaceState(cfg.Upload.Workspace, workspaceState{Time: "2026-08-24T06:59", Title: "weekly report"}))
 	store := &fakeStore{}
 	h := NewServer(cfg, store).Handler()
 	cookie := loginCookie(t, h)
@@ -152,6 +153,8 @@ func TestUploadPushSuccess(t *testing.T) {
 	entries, err := os.ReadDir(cfg.Upload.Workspace)
 	require.NoError(t, err)
 	require.Empty(t, entries)
+	// The pinned push state is cleared too.
+	require.Equal(t, workspaceState{}, loadWorkspaceState(cfg.Upload.Workspace))
 }
 
 func TestUploadPushConflict(t *testing.T) {

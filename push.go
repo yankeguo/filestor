@@ -194,6 +194,7 @@ func (s *Server) runPush(job *pushJob, dir, prefix string, names []string) {
 		_ = os.Remove(filepath.Join(dir, name))
 		job.update(func(st *pushState) { st.Done++ })
 	}
+	clearWorkspaceState(dir)
 	job.update(func(st *pushState) {
 		st.Running = false
 		st.Current = ""

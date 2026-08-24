@@ -7,9 +7,12 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -219,4 +222,87 @@ func TestUploadAddRejectsEmpty(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func postUploadFile(t *testing.T, h http.Handler, cookie *http.Cookie, name string) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	part, err := mw.CreateFormFile("file", name)
+	require.NoError(t, err)
+	_, err = io.WriteString(part, "data")
+	require.NoError(t, err)
+	require.NoError(t, mw.Close())
+	req := httptest.NewRequest(http.MethodPost, "/upload/files", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+}
+
+func putUploadState(t *testing.T, h http.Handler, cookie *http.Cookie, when, title string) *httptest.ResponseRecorder {
+	t.Helper()
+	form := url.Values{"time": {when}, "title": {title}}
+	req := httptest.NewRequest(http.MethodPut, "/upload/state", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func deleteUploadFile(t *testing.T, h http.Handler, cookie *http.Cookie, name string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, "/upload/files?name="+url.QueryEscape(name), nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestUploadStateLifecycle(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	h := NewServer(cfg, &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
+
+	// No staged files: nothing pinned, PUT does not persist.
+	require.Equal(t, workspaceState{}, loadWorkspaceState(dir))
+	require.Equal(t, http.StatusOK, putUploadState(t, h, cookie, "2026-08-24T06:59", "draft").Code)
+	require.Equal(t, workspaceState{}, loadWorkspaceState(dir))
+
+	// First staged file pins the current time.
+	postUploadFile(t, h, cookie, "a.txt")
+	st := loadWorkspaceState(dir)
+	require.NotEmpty(t, st.Time)
+	_, err := time.Parse(pushTimeLayout, st.Time)
+	require.NoError(t, err)
+
+	// A second file does not move the pinned time.
+	postUploadFile(t, h, cookie, "b.txt")
+	require.Equal(t, st, loadWorkspaceState(dir))
+
+	// Frontend edits are persisted.
+	require.Equal(t, http.StatusOK, putUploadState(t, h, cookie, "2026-08-24T06:59", "weekly report").Code)
+	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "weekly report"}, loadWorkspaceState(dir))
+
+	// Invalid time is rejected and keeps the old value.
+	require.Equal(t, http.StatusBadRequest, putUploadState(t, h, cookie, "not-a-time", "x").Code)
+	require.Equal(t, "2026-08-24T06:59", loadWorkspaceState(dir).Time)
+
+	// The page prefills the pinned time and title.
+	req := httptest.NewRequest(http.MethodGet, "/upload", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `value="2026-08-24T06:59"`)
+	require.Contains(t, rec.Body.String(), `value="weekly report"`)
+
+	// Removing the last staged file clears the state.
+	deleteUploadFile(t, h, cookie, "a.txt")
+	require.Equal(t, "2026-08-24T06:59", loadWorkspaceState(dir).Time)
+	deleteUploadFile(t, h, cookie, "b.txt")
+	require.Equal(t, workspaceState{}, loadWorkspaceState(dir))
 }

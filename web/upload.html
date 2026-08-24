@@ -15,10 +15,10 @@
       <div class="card-body">
         <div class="row g-2">
           <div class="col-12 col-md-auto">
-            <input id="push-time" type="datetime-local" class="form-control" step="60">
+            <input id="push-time" type="datetime-local" class="form-control" step="60" value="{{.Time}}">
           </div>
           <div class="col">
-            <input id="push-title" type="text" class="form-control" maxlength="80" placeholder="Title, e.g. weekly report">
+            <input id="push-title" type="text" class="form-control" maxlength="80" value="{{.Title}}" placeholder="Title, e.g. weekly report">
           </div>
           <div class="col-12 col-md-auto">
             <button id="push-btn" type="button" class="btn btn-primary w-100">
@@ -118,11 +118,28 @@
       }
 
       function pad2(n) { return (n < 10 ? '0' : '') + n; }
-      (function () {
+      // The server prefills the pinned staging time; fall back to now only
+      // when nothing has been pinned yet (empty workspace).
+      if (!pushTime.value) {
         var d = new Date();
         pushTime.value = d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) +
           'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
-      })();
+      }
+
+      // Persist draft push options so a page reload keeps them.
+      function saveState() {
+        var body = new URLSearchParams();
+        body.set('time', pushTime.value);
+        body.set('title', pushTitle.value);
+        fetch('/upload/state', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body.toString(),
+          credentials: 'same-origin'
+        }).then(function (res) { goLoginIfNeeded(res); }).catch(function () {});
+      }
+      pushTime.addEventListener('change', saveState);
+      pushTitle.addEventListener('change', saveState);
 
       function showError(msg) {
         if (!msg) {
