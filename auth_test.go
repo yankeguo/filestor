@@ -55,6 +55,12 @@ func TestLoginAndGuard(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusFound, rec.Code)
+	require.Equal(t, "/browse", rec.Header().Get("Location"))
+
+	req = httptest.NewRequest(http.MethodGet, "/browse", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusFound, rec.Code)
 	require.Equal(t, "/login", rec.Header().Get("Location"))
 
 	req = httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=admin&password=wrong"))
@@ -71,7 +77,7 @@ func TestLoginAndGuard(t *testing.T) {
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusFound, rec.Code)
-	require.Equal(t, "/", rec.Header().Get("Location"))
+	require.Equal(t, "/browse", rec.Header().Get("Location"))
 	var cookie *http.Cookie
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == sessionCookieName {
@@ -87,11 +93,18 @@ func TestLoginAndGuard(t *testing.T) {
 	req.AddCookie(cookie)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusFound, rec.Code)
+	require.Equal(t, "/browse", rec.Header().Get("Location"))
+
+	req = httptest.NewRequest(http.MethodGet, "/browse", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), "Name")
 	require.Contains(t, rec.Body.String(), "No objects")
 
-	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req = httptest.NewRequest(http.MethodGet, "/browse", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: cookie.Value + "tamper"})
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -124,7 +137,7 @@ func TestLoginRedirectsWhenAlreadySignedIn(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusFound, rec.Code)
-	require.Equal(t, "/", rec.Header().Get("Location"))
+	require.Equal(t, "/browse", rec.Header().Get("Location"))
 }
 
 func TestLogoutClearsCookieWithoutSession(t *testing.T) {

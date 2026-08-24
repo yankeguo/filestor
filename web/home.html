@@ -15,7 +15,7 @@
           {{if eq $i (sub (len $.Crumbs) 1)}}
             <li class="breadcrumb-item active" aria-current="page">{{$c.Name}}</li>
           {{else}}
-            <li class="breadcrumb-item"><a href="/{{if $c.Prefix}}?prefix={{$c.Prefix}}{{end}}">{{$c.Name}}</a></li>
+            <li class="breadcrumb-item"><a href="/browse{{if $c.Prefix}}?prefix={{$c.Prefix}}{{end}}">{{$c.Name}}</a></li>
           {{end}}
         {{end}}
       </ol>
@@ -35,7 +35,7 @@
             {{if .HasParent}}
             <tr>
               <td colspan="4">
-                <a href="/{{if .Parent}}?prefix={{.Parent}}{{end}}" class="text-decoration-none">
+                <a href="/browse{{if .Parent}}?prefix={{.Parent}}{{end}}" class="text-decoration-none">
                   <i class="bi bi-arrow-up-left"></i> ..
                 </a>
               </td>
@@ -44,7 +44,7 @@
             {{range .Dirs}}
             <tr>
               <td>
-                <a href="/?prefix={{.Prefix}}" class="text-decoration-none">
+                <a href="/browse?prefix={{.Prefix}}" class="text-decoration-none">
                   <i class="bi bi-folder2"></i> {{.Name}}
                 </a>
               </td>
@@ -75,7 +75,7 @@
       </div>
       {{if .NextMarker}}
       <div class="card-footer">
-        <a href="/?prefix={{.Prefix}}&marker={{.NextMarker}}">Next page</a>
+        <a href="/browse?prefix={{.Prefix}}&marker={{.NextMarker}}">Next page</a>
       </div>
       {{end}}
     </div>

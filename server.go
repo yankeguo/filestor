@@ -29,7 +29,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /login", s.handleLogin)
 	mux.HandleFunc("POST /login", s.handleLogin)
 	mux.HandleFunc("POST /logout", s.handleLogout)
-	mux.Handle("GET /{$}", s.requireAuth(http.HandlerFunc(s.handleHome)))
+	mux.HandleFunc("GET /{$}", s.handleRoot)
+	mux.Handle("GET /browse", s.requireAuth(http.HandlerFunc(s.handleBrowse)))
 	mux.Handle("GET /download", s.requireAuth(http.HandlerFunc(s.handleDownload)))
 	return withSecurityHeaders(mux)
 }
@@ -66,7 +67,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if s.sessionCookieValid(r) {
-			http.Redirect(w, r, "/", http.StatusFound)
+			http.Redirect(w, r, "/browse", http.StatusFound)
 			return
 		}
 		s.render(w, "login.html", map[string]any{"Error": ""})
@@ -83,7 +84,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.setSessionCookie(w, r)
-		http.Redirect(w, r, "/", http.StatusFound)
+		http.Redirect(w, r, "/browse", http.StatusFound)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -94,7 +95,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
-func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/browse", http.StatusFound)
+}
+
+func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
 		http.Error(w, "object store unavailable", http.StatusServiceUnavailable)
 		return

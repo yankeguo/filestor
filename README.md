@@ -18,7 +18,7 @@ docker run --rm -p 8080:8080 \
   ghcr.io/yankeguo/filestor:latest
 ```
 
-Open `http://127.0.0.1:8080`. Unauthenticated visits redirect to `/login`. After sign-in, browse prefixes like folders and download via OSS presigned URLs.
+Open `http://127.0.0.1:8080`. Unauthenticated visits redirect to `/login`. After sign-in, `/` sends you to `/browse` to walk prefixes like folders and download via OSS presigned URLs.
 
 ## Flags and environment
 
@@ -55,7 +55,8 @@ All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,acce
 
 ## Browse and download
 
-- `GET /?prefix=&marker=` lists the current prefix (`Delimiter=/`, 200 keys per page)
+- `GET /` redirects to `/browse`
+- `GET /browse?prefix=&marker=` lists the current prefix (`Delimiter=/`, 200 keys per page)
 - `GET /download?key=` signs a 5-minute GET URL and 302s to OSS
 - Folder rows are common prefixes; files skip the placeholder object equal to the current prefix
 
