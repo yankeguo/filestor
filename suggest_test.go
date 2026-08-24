@@ -75,7 +75,7 @@ func TestUploadSuggestSuccess(t *testing.T) {
 			require.Equal(t, "test-model", req.Model)
 			require.Equal(t, "high", req.ReasoningEffort)
 			require.Equal(t, "Bearer token", r.Header.Get("Authorization"))
-			require.Len(t, req.Tools, 3)
+			require.Len(t, req.Tools, 4)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c1","type":"function","function":{"name":"read_file_as_text","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
 		case 2:
@@ -102,9 +102,11 @@ func TestUploadSuggestSuccess(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	var payload struct {
 		Title string `json:"title"`
+		Time  string `json:"time"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
 	require.Equal(t, "weekly-report", payload.Title)
+	require.Empty(t, payload.Time)
 
 	// Title persisted, pinned time preserved.
 	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "weekly-report"}, loadWorkspaceState(dir))
@@ -200,6 +202,89 @@ func TestUploadSuggestObjectArguments(t *testing.T) {
 	rec := postSuggest(t, h, cookie)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "from-object", loadWorkspaceState(cfg.Upload.Workspace).Title)
+}
+
+func TestParseSuggestTime(t *testing.T) {
+	got, err := parseSuggestTime(" 2026-08-20T15:04 ")
+	require.NoError(t, err)
+	require.Equal(t, "2026-08-20T15:04", got)
+
+	got, err = parseSuggestTime("2026-08-20")
+	require.NoError(t, err)
+	require.Equal(t, "2026-08-20T00:00", got)
+
+	_, err = parseSuggestTime("")
+	require.Error(t, err)
+	_, err = parseSuggestTime("not-a-time")
+	require.Error(t, err)
+}
+
+func TestUploadSuggestSetDatetime(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("invoice 2026-08-20"), 0o644))
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "old"}))
+
+	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+		switch call {
+		case 1:
+			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+				`{"id":"c1","type":"function","function":{"name":"set_datetime","arguments":"{\"time\":\"2026-08-20\"}"}}]}}]}`
+		case 2:
+			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"invoice\"}"}}]}}]}`
+		default:
+			t.Fatalf("unexpected extra LLM call %d", call)
+			return ""
+		}
+	})
+	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	h := NewServer(cfg, &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
+	rec := postSuggest(t, h, cookie)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var payload struct {
+		Title string `json:"title"`
+		Time  string `json:"time"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, "invoice", payload.Title)
+	require.Equal(t, "2026-08-20T00:00", payload.Time)
+	require.Equal(t, workspaceState{Time: "2026-08-20T00:00", Title: "invoice"}, loadWorkspaceState(dir))
+}
+
+func TestUploadSuggestInvalidDatetimeKeepsPinnedTime(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59"}))
+
+	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+		switch call {
+		case 1:
+			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+				`{"id":"c1","type":"function","function":{"name":"set_datetime","arguments":"{\"time\":\"not-a-time\"}"}}]}}]}`
+		case 2:
+			found := false
+			for _, m := range req.Messages {
+				if s, ok := m.Content.(string); ok && m.Role == "tool" && strings.Contains(s, "invalid time") {
+					found = true
+				}
+			}
+			require.True(t, found)
+			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"ok\"}"}}]}}]}`
+		default:
+			t.Fatalf("unexpected extra LLM call %d", call)
+			return ""
+		}
+	})
+	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	h := NewServer(cfg, &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
+	rec := postSuggest(t, h, cookie)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "ok"}, loadWorkspaceState(dir))
 }
 
 func TestReadWorkspaceText(t *testing.T) {

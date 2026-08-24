@@ -11,7 +11,7 @@ Cookie-authenticated browser for an Aliyun OSS bucket. Listing goes through this
 - `GET /download` 302s to a 5-minute OSS GET URL (`Content-Disposition: attachment`)
 - Local upload workspace at `/upload` (list, drag-and-drop add with per-file progress, delete). Files stay on disk until pushed.
 - One-click push of staged files to OSS under `YYYY/MM/YYYYMMDDhhmm-TITLE/` (async job, one at a time, live progress on the page).
-- One-click LLM title suggestion for staged files (OpenAI-compatible endpoint with tool use: `read_file_as_text`, `read_file_as_image`, `set_title`). Office/PDF and odd or oversized images are converted at suggest-time inside the container.
+- One-click LLM title suggestion for staged files (OpenAI-compatible endpoint with tool use: `read_file_as_text`, `read_file_as_image`, `set_datetime`, `set_title`). Office/PDF and odd or oversized images are converted at suggest-time inside the container.
 - SIGINT/SIGTERM stops accepting connections and waits for in-flight requests; a second signal terminates
 
 ## Quick start
@@ -89,7 +89,7 @@ All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,acce
 | `POST` | `/upload/files` | cookie | Multipart field `file` (one or more); writes into the workspace |
 | `DELETE` | `/upload/files?name=` | cookie | Delete one workspace file |
 | `PUT` | `/upload/state` | cookie | Form `time` + `title`; persists the draft push options (no-op while nothing is staged) |
-| `POST` | `/upload/suggest` | cookie | Ask the configured LLM to pick a title from the staged files (tools: `read_file_as_text`, `read_file_as_image`, `set_title`); persists it to the workspace state |
+| `POST` | `/upload/suggest` | cookie | Ask the configured LLM to pick a title (and optional document time) from the staged files (tools: `read_file_as_text`, `read_file_as_image`, `set_datetime`, `set_title`); persists them to the workspace state |
 | `POST` | `/upload/push` | cookie | Form `time` (`YYYY-MM-DDTHH:mm`) + `title`; starts the async OSS push (409 while one is running) |
 | `GET` | `/upload/push/status` | cookie | JSON progress of the current/last push job |
 

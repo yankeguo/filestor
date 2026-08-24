@@ -26,6 +26,7 @@ const (
 const suggestSystemPrompt = `You invent a short, descriptive title for a batch of staged files that will be uploaded to object storage under "YYYYMMDDhhmm-TITLE/".
 - Inspect file contents with the tools when the file names alone are not enough. read_file_as_text and read_file_as_image convert office documents, PDFs, and other formats automatically; you do not need to care about the conversion.
 - The title should be a short phrase (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单".
+- If the contents contain a clear document date or datetime, call set_datetime with it (YYYY-MM-DD or YYYY-MM-DDTHH:mm). Do not guess. Call it before or in the same turn as set_title.
 - When you have decided, call set_title exactly once with the raw title.`
 
 type chatImageURL struct {
@@ -116,6 +117,17 @@ var suggestTools = []chatTool{
 			"required": []string{"title"},
 		},
 	}},
+	{Type: "function", Function: chatToolFunction{
+		Name:        "set_datetime",
+		Description: "Set the staging record time from a clear date or datetime found in the files. Do not guess.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"time": map[string]any{"type": "string", "description": "Document time as YYYY-MM-DDTHH:mm, or YYYY-MM-DD if only a date is present"},
+			},
+			"required": []string{"time"},
+		},
+	}},
 }
 
 // suggestAgent runs the chat-completions tool loop against the configured
@@ -125,6 +137,7 @@ type suggestAgent struct {
 	dir   string
 	http  *http.Client
 	title string
+	when  string
 }
 
 func (s *Server) handleUploadSuggest(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +167,7 @@ func (s *Server) handleUploadSuggest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "suggest failed", http.StatusBadGateway)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "title": title})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "title": title, "time": ag.when})
 }
 
 func (a *suggestAgent) run(ctx context.Context, files []workspaceFile) (string, error) {
@@ -203,6 +216,7 @@ func (a *suggestAgent) runTool(ctx context.Context, tc chatToolCall) []chatMessa
 	var args struct {
 		Name  string `json:"name"`
 		Title string `json:"title"`
+		Time  string `json:"time"`
 	}
 	if err := unmarshalToolArgs(tc.Function.Arguments, &args); err != nil {
 		return reply("invalid arguments: " + err.Error())
@@ -238,6 +252,18 @@ func (a *suggestAgent) runTool(ctx context.Context, tc chatToolCall) []chatMessa
 		}
 		a.title = title
 		return reply("title set")
+	case "set_datetime":
+		when, err := parseSuggestTime(args.Time)
+		if err != nil {
+			return reply("error: invalid time")
+		}
+		st := loadWorkspaceState(a.dir)
+		st.Time = when
+		if err := saveWorkspaceState(a.dir, st); err != nil {
+			return reply("error: " + err.Error())
+		}
+		a.when = when
+		return reply("datetime set")
 	default:
 		return reply("unknown tool: " + tc.Function.Name)
 	}
@@ -298,6 +324,20 @@ func unmarshalToolArgs(raw json.RawMessage, dest any) error {
 		}
 	}
 	return json.Unmarshal(raw, dest)
+}
+
+func parseSuggestTime(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", errors.New("invalid time")
+	}
+	if t, err := time.Parse(pushTimeLayout, s); err == nil {
+		return t.Format(pushTimeLayout), nil
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t.Format(pushTimeLayout), nil
+	}
+	return "", errors.New("invalid time")
 }
 
 // readWorkspaceText reads a staged file as text: NUL-sniffed, capped at 64 KiB.

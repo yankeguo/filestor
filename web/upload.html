@@ -419,8 +419,9 @@
           })
           .then(function (data) {
             if (!data) return;
-            // The backend already persisted the title to the workspace state.
+            // The backend already persisted title/time to the workspace state.
             pushTitle.value = data.title || '';
+            if (data.time) pushTime.value = data.time;
             showError('');
           })
           .catch(function (e) {
