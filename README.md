@@ -2,6 +2,15 @@
 
 Cookie-authenticated browser for an Aliyun OSS bucket. Listing goes through this service; downloads redirect to a short-lived presigned URL so object bytes never transit filestor.
 
+## Features
+
+- Standard `net/http` server
+- YAML config: `admin.{username,password}` and `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}`
+- Cookie login (HMAC, HttpOnly, SameSite=Lax)
+- Prefix listing treated as folders (`Delimiter=/`)
+- `GET /download` 302s to a 5-minute OSS GET URL (`Content-Disposition: attachment`)
+- SIGINT/SIGTERM stops accepting connections and waits for in-flight requests; a second signal terminates
+
 ## Quick start
 
 ```bash
@@ -18,7 +27,7 @@ docker run --rm -p 8080:8080 \
   ghcr.io/yankeguo/filestor:latest
 ```
 
-Open `http://127.0.0.1:8080`. Unauthenticated visits redirect to `/login`. After sign-in, `/` sends you to `/browse` to walk prefixes like folders and download via OSS presigned URLs.
+Open `http://127.0.0.1:8080`. Unauthenticated visits to `/browse` redirect to `/login`. After sign-in, `/` 302s to `/browse` so you can walk prefixes and download via OSS presigned URLs. `/` itself is unauthenticated and reserved for later pages; the navbar brand still points there.
 
 ## Flags and environment
 
@@ -43,7 +52,7 @@ aliyun:
     access_key_secret: REPLACE_ME
 ```
 
-All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}` are required. `endpoint` may omit `https://`; it is added on load. Do not commit `config.yaml`.
+All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}` are required. Field names follow the official Aliyun OSS API (`access_key_id` / `access_key_secret` / `endpoint`), not AWS/boto3 names. `endpoint` may omit `https://`; it is added on load. Do not commit `config.yaml`.
 
 ## Auth
 
@@ -51,14 +60,20 @@ All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,acce
 - `Secure` is set when the request is TLS or `X-Forwarded-Proto: https`
 - Session TTL is 12 hours; changing the admin password invalidates existing cookies
 - Failed logins wait 1 second before responding
-- `GET /healthz` is unauthenticated
+- `GET /healthz` and `GET /` are unauthenticated
 
-## Browse and download
+## HTTP
 
-- `GET /` redirects to `/browse`
-- `GET /browse?prefix=&marker=` lists the current prefix (`Delimiter=/`, 200 keys per page)
-- `GET /download?key=` signs a 5-minute GET URL and 302s to OSS
-- Folder rows are common prefixes; files skip the placeholder object equal to the current prefix
+| Method | Path | Auth | Role |
+|---|---|---|---|
+| `GET` | `/healthz` | no | `OK` |
+| `GET` | `/` | no | 302 to `/browse` |
+| `GET`/`POST` | `/login` | no | Sign-in; already logged in → `/browse` |
+| `POST` | `/logout` | cookie | Clear session, 302 to `/login` |
+| `GET` | `/browse?prefix=&marker=` | cookie | List current prefix (`Delimiter=/`, 200 keys per page) |
+| `GET` | `/download?key=` | cookie | Sign a 5-minute GET URL and 302 to OSS |
+
+Folder rows are common prefixes; files skip the placeholder object whose key equals the current prefix. There is no upload, delete, or search.
 
 ## Docker / GHCR
 
@@ -76,3 +91,9 @@ Workflow: `.github/workflows/release.yml`.
 ```bash
 go test ./...
 ```
+
+Go 1.27+. `config.yaml` holds secrets and is gitignored.
+
+## License
+
+MIT, Y.-K. Guo
