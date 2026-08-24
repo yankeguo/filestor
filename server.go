@@ -11,11 +11,12 @@ const loginFailDelay = time.Second
 
 type Server struct {
 	Config     *Config
+	store      ObjectStore
 	sessionKey []byte
 }
 
-func NewServer(cfg *Config) *Server {
-	s := &Server{Config: cfg}
+func NewServer(cfg *Config, store ObjectStore) *Server {
+	s := &Server{Config: cfg, store: store}
 	if cfg != nil {
 		s.sessionKey = sessionCookieKey(cfg.Admin.Username, cfg.Admin.Password)
 	}
@@ -29,6 +30,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.handleLogin)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.Handle("GET /{$}", s.requireAuth(http.HandlerFunc(s.handleHome)))
+	mux.Handle("GET /download", s.requireAuth(http.HandlerFunc(s.handleDownload)))
 	return withSecurityHeaders(mux)
 }
 
@@ -92,10 +94,39 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
-func (s *Server) handleHome(w http.ResponseWriter, _ *http.Request) {
-	s.render(w, "home.html", map[string]any{
-		"Username": s.Config.Admin.Username,
-	})
+func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "object store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	prefix := normalizePrefix(r.URL.Query().Get("prefix"))
+	marker := r.URL.Query().Get("marker")
+	page, err := s.store.List(prefix, marker)
+	if err != nil {
+		log.Println("list objects:", err)
+		http.Error(w, "list failed", http.StatusBadGateway)
+		return
+	}
+	s.render(w, "home.html", buildBrowseData(prefix, page))
+}
+
+func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "object store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	key := strings.TrimSpace(r.URL.Query().Get("key"))
+	if key == "" {
+		http.Error(w, "missing key", http.StatusBadRequest)
+		return
+	}
+	signed, err := s.store.SignGetURL(key, signURLTTL)
+	if err != nil {
+		log.Println("sign url:", err)
+		http.Error(w, "sign failed", http.StatusBadGateway)
+		return
+	}
+	http.Redirect(w, r, signed, http.StatusFound)
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {

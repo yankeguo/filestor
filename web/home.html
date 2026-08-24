@@ -9,11 +9,75 @@
 <body>
   {{template "nav" .}}
   <main class="container py-4">
+    <nav aria-label="breadcrumb" class="mb-3">
+      <ol class="breadcrumb mb-0">
+        {{range $i, $c := .Crumbs}}
+          {{if eq $i (sub (len $.Crumbs) 1)}}
+            <li class="breadcrumb-item active" aria-current="page">{{$c.Name}}</li>
+          {{else}}
+            <li class="breadcrumb-item"><a href="/{{if $c.Prefix}}?prefix={{$c.Prefix}}{{end}}">{{$c.Name}}</a></li>
+          {{end}}
+        {{end}}
+      </ol>
+    </nav>
     <div class="card">
-      <div class="card-body">
-        <h1 class="h4 mb-2">Welcome</h1>
-        <p class="text-secondary mb-0">Signed in as <strong>{{.Username}}</strong>.</p>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th class="text-end">Size</th>
+              <th class="text-nowrap">Modified</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{if .HasParent}}
+            <tr>
+              <td colspan="4">
+                <a href="/{{if .Parent}}?prefix={{.Parent}}{{end}}" class="text-decoration-none">
+                  <i class="bi bi-arrow-up-left"></i> ..
+                </a>
+              </td>
+            </tr>
+            {{end}}
+            {{range .Dirs}}
+            <tr>
+              <td>
+                <a href="/?prefix={{.Prefix}}" class="text-decoration-none">
+                  <i class="bi bi-folder2"></i> {{.Name}}
+                </a>
+              </td>
+              <td></td>
+              <td></td>
+              <td></td>
+            </tr>
+            {{end}}
+            {{range .Files}}
+            <tr>
+              <td><i class="bi bi-file-earmark"></i> {{.Name}}</td>
+              <td class="text-end text-secondary text-nowrap">{{.Size}}</td>
+              <td class="text-secondary text-nowrap">{{.LastModified}}</td>
+              <td class="text-end">
+                <a href="/download?key={{.Key}}" class="btn btn-sm btn-outline-primary">
+                  <i class="bi bi-download"></i> Download
+                </a>
+              </td>
+            </tr>
+            {{end}}
+            {{if and (not .Dirs) (not .Files) (not .HasParent)}}
+            <tr>
+              <td colspan="4" class="text-secondary">No objects</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
       </div>
+      {{if .NextMarker}}
+      <div class="card-footer">
+        <a href="/?prefix={{.Prefix}}&marker={{.NextMarker}}">Next page</a>
+      </div>
+      {{end}}
     </div>
   </main>
 </body>

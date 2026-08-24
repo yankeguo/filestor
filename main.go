@@ -39,7 +39,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              listen,
-		Handler:           NewServer(cfg).Handler(),
+		Handler:           NewServer(cfg, rg.Must(newOSSStore(cfg.Aliyun.OSS))).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}

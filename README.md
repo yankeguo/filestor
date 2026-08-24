@@ -1,12 +1,12 @@
 # filestor
 
-Simple cookie-authenticated HTTP service built on Go `net/http`.
+Cookie-authenticated browser for an Aliyun OSS bucket. Listing goes through this service; downloads redirect to a short-lived presigned URL so object bytes never transit filestor.
 
 ## Quick start
 
 ```bash
 cp config.example.yml config.yml
-# edit admin.username and admin.password
+# edit admin credentials and aliyun.oss.*
 go run . -config config.yml -listen :8080
 ```
 
@@ -18,7 +18,7 @@ docker run --rm -p 8080:8080 \
   ghcr.io/yankeguo/filestor:latest
 ```
 
-Open `http://127.0.0.1:8080`. Unauthenticated visits redirect to `/login`. After sign-in, a signed HttpOnly cookie keeps the session.
+Open `http://127.0.0.1:8080`. Unauthenticated visits redirect to `/login`. After sign-in, browse prefixes like folders and download via OSS presigned URLs.
 
 ## Flags and environment
 
@@ -33,9 +33,15 @@ Open `http://127.0.0.1:8080`. Unauthenticated visits redirect to `/login`. After
 admin:
   username: admin
   password: REPLACE_ME
+aliyun:
+  oss:
+    endpoint: https://oss-cn-hangzhou.aliyuncs.com
+    bucket: example-bucket
+    access_key_id: REPLACE_ME
+    access_key_secret: REPLACE_ME
 ```
 
-`admin.username` and `admin.password` are required. Do not commit `config.yml`.
+All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}` are required. `endpoint` may omit `https://`; it is added on load. Do not commit `config.yml`.
 
 ## Auth
 
@@ -44,6 +50,12 @@ admin:
 - Session TTL is 12 hours; changing the admin password invalidates existing cookies
 - Failed logins wait 1 second before responding
 - `GET /healthz` is unauthenticated
+
+## Browse and download
+
+- `GET /?prefix=&marker=` lists the current prefix (`Delimiter=/`, 200 keys per page)
+- `GET /download?key=` signs a 5-minute GET URL and 302s to OSS
+- Folder rows are common prefixes; files skip the placeholder object equal to the current prefix
 
 ## Docker / GHCR
 

@@ -14,6 +14,22 @@ func testCfg() *Config {
 	return &Config{Admin: AdminConfig{Username: "admin", Password: "secret"}}
 }
 
+func loginCookie(t *testing.T, h http.Handler) *http.Cookie {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=admin&password=secret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusFound, rec.Code)
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionCookieName {
+			return c
+		}
+	}
+	t.Fatal("missing session cookie")
+	return nil
+}
+
 func TestSessionCookieHMAC(t *testing.T) {
 	key := sessionCookieKey("admin", "secret")
 	exp := time.Date(2026, 8, 24, 15, 0, 0, 0, time.UTC)
@@ -33,7 +49,7 @@ func TestCookieSecureFromForwardedProto(t *testing.T) {
 }
 
 func TestLoginAndGuard(t *testing.T) {
-	h := NewServer(testCfg()).Handler()
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -72,8 +88,8 @@ func TestLoginAndGuard(t *testing.T) {
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "Signed in as")
-	require.Contains(t, rec.Body.String(), "admin")
+	require.Contains(t, rec.Body.String(), "Name")
+	require.Contains(t, rec.Body.String(), "No objects")
 
 	req = httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: cookie.Value + "tamper"})
@@ -91,7 +107,7 @@ func TestLoginAndGuard(t *testing.T) {
 }
 
 func TestLoginPage(t *testing.T) {
-	h := NewServer(testCfg()).Handler()
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
 	req := httptest.NewRequest(http.MethodGet, "/login", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -100,29 +116,19 @@ func TestLoginPage(t *testing.T) {
 }
 
 func TestLoginRedirectsWhenAlreadySignedIn(t *testing.T) {
-	h := NewServer(testCfg()).Handler()
-	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=admin&password=secret"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	var cookie *http.Cookie
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == sessionCookieName {
-			cookie = c
-		}
-	}
-	require.NotNil(t, cookie)
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
 
-	req = httptest.NewRequest(http.MethodGet, "/login", nil)
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
 	req.AddCookie(cookie)
-	rec = httptest.NewRecorder()
+	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusFound, rec.Code)
 	require.Equal(t, "/", rec.Header().Get("Location"))
 }
 
 func TestLogoutClearsCookieWithoutSession(t *testing.T) {
-	h := NewServer(testCfg()).Handler()
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
 	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -139,7 +145,7 @@ func TestLogoutClearsCookieWithoutSession(t *testing.T) {
 }
 
 func TestSecurityHeaders(t *testing.T) {
-	h := NewServer(testCfg()).Handler()
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
 	req := httptest.NewRequest(http.MethodGet, "/login", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -153,7 +159,7 @@ func TestSecurityHeaders(t *testing.T) {
 }
 
 func TestHealthzDoesNotRequireLogin(t *testing.T) {
-	h := NewServer(testCfg()).Handler()
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
