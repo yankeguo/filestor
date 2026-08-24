@@ -14,6 +14,7 @@ type Config struct {
 	Admin  AdminConfig  `yaml:"admin"`
 	Aliyun AliyunConfig `yaml:"aliyun"`
 	Upload UploadConfig `yaml:"upload"`
+	LLM    LLMConfig    `yaml:"llm"`
 }
 
 type AdminConfig struct {
@@ -34,6 +35,14 @@ type OSSConfig struct {
 
 type UploadConfig struct {
 	Workspace string `yaml:"workspace"`
+}
+
+// LLMConfig describes an OpenAI-compatible endpoint for future LLM calls.
+// All fields are optional; url and model must be set together.
+type LLMConfig struct {
+	URL     string            `yaml:"url"`
+	Model   string            `yaml:"model"`
+	Headers map[string]string `yaml:"headers"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -81,6 +90,22 @@ func (c *Config) validate() error {
 	c.Upload.Workspace = strings.TrimSpace(c.Upload.Workspace)
 	if c.Upload.Workspace == "" {
 		c.Upload.Workspace = defaultUploadWorkspace
+	}
+	c.LLM.URL = strings.TrimSpace(c.LLM.URL)
+	c.LLM.Model = strings.TrimSpace(c.LLM.Model)
+	if (c.LLM.URL == "") != (c.LLM.Model == "") {
+		return fmt.Errorf("config: llm.url and llm.model must be set together")
+	}
+	for k, v := range c.LLM.Headers {
+		nk, nv := strings.TrimSpace(k), strings.TrimSpace(v)
+		if nk == "" {
+			delete(c.LLM.Headers, k)
+			continue
+		}
+		if nk != k || nv != v {
+			delete(c.LLM.Headers, k)
+			c.LLM.Headers[nk] = nv
+		}
 	}
 	return nil
 }

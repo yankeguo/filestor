@@ -9,3 +9,10 @@ aliyun:
     access_key_secret: REPLACE_ME
 upload:
   workspace: upload-workspace
+# Optional OpenAI-compatible LLM endpoint (reserved for future use).
+# url and model must be set together; headers is an optional map of HTTP headers.
+# llm:
+#   url: https://api.example.com/v1/chat/completions
+#   model: my-model
+#   headers:
+#     Authorization: Bearer REPLACE_ME
