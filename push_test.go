@@ -56,7 +56,7 @@ func TestSanitizePushTitleTruncates(t *testing.T) {
 
 func TestPushPrefix(t *testing.T) {
 	when := time.Date(2026, 8, 24, 6, 59, 0, 0, time.UTC)
-	require.Equal(t, "2026/08/20260824-0659-title", pushPrefix(when, "title"))
+	require.Equal(t, "2026/08/202608240659-title", pushPrefix(when, "title"))
 }
 
 func postPush(t *testing.T, h http.Handler, cookie *http.Cookie, when, title string) *httptest.ResponseRecorder {
@@ -138,14 +138,14 @@ func TestUploadPushSuccess(t *testing.T) {
 
 	st := awaitPushDone(t, h, cookie)
 	require.Empty(t, st.Error)
-	require.Equal(t, "2026/08/20260824-0659-weekly-report/", st.Prefix)
+	require.Equal(t, "2026/08/202608240659-weekly-report/", st.Prefix)
 	require.Equal(t, 2, st.Total)
 	require.Equal(t, 2, st.Done)
 	require.Equal(t, int64(5), st.TotalBytes)
 	require.Equal(t, int64(5), st.DoneBytes)
 	require.Equal(t, []string{
-		"2026/08/20260824-0659-weekly-report/a.txt",
-		"2026/08/20260824-0659-weekly-report/b.txt",
+		"2026/08/202608240659-weekly-report/a.txt",
+		"2026/08/202608240659-weekly-report/b.txt",
 	}, store.putKeys())
 
 	// Uploaded files are removed from the staging workspace.

@@ -10,7 +10,7 @@ Cookie-authenticated browser for an Aliyun OSS bucket. Listing goes through this
 - Prefix listing treated as folders (`Delimiter=/`)
 - `GET /download` 302s to a 5-minute OSS GET URL (`Content-Disposition: attachment`)
 - Local upload workspace at `/upload` (list, drag-and-drop add, delete). Files stay on disk until pushed.
-- One-click push of staged files to OSS under `YYYY/MM/YYYYMMDD-HHmm-TITLE/` (async job, one at a time, live progress on the page).
+- One-click push of staged files to OSS under `YYYY/MM/YYYYMMDDhhmm-TITLE/` (async job, one at a time, live progress on the page).
 - SIGINT/SIGTERM stops accepting connections and waits for in-flight requests; a second signal terminates
 
 ## Quick start
@@ -84,7 +84,7 @@ All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,acce
 | `POST` | `/upload/push` | cookie | Form `time` (`YYYY-MM-DDTHH:mm`) + `title`; starts the async OSS push (409 while one is running) |
 | `GET` | `/upload/push/status` | cookie | JSON progress of the current/last push job |
 
-Folder rows are common prefixes; files skip the placeholder object whose key equals the current prefix. `/upload` only manages a local staging directory (flat files only: no folders, no hidden files starting with `.`; names are basenames). Pushing uploads every staged file to `YYYY/MM/YYYYMMDD-HHmm-TITLE/<name>` in the bucket — the picked time is used as-is regardless of timezone, and the title is sanitized to `[-_.A-Za-z0-9]` plus CJK letters with other chars folded to `-`. Each file is removed from staging once it lands; on failure the job stops and the remaining files stay staged. There is no search.
+Folder rows are common prefixes; files skip the placeholder object whose key equals the current prefix. `/upload` only manages a local staging directory (flat files only: no folders, no hidden files starting with `.`; names are basenames). Pushing uploads every staged file to `YYYY/MM/YYYYMMDDhhmm-TITLE/<name>` in the bucket — the picked time is used as-is regardless of timezone, and the title is sanitized to `[-_.A-Za-z0-9]` plus CJK letters with other chars folded to `-`. Each file is removed from staging once it lands; on failure the job stops and the remaining files stay staged. There is no search.
 
 ## Docker / GHCR
 
