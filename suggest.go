@@ -14,20 +14,24 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
-	suggestMaxRounds     = 8
+	suggestMaxRounds     = 16
+	suggestMaxToolCalls  = 24
 	suggestTextMaxBytes  = 64 << 10
 	suggestImageMaxBytes = 8 << 20
+	suggestPeekMaxBytes  = 1 << 10
 	suggestHTTPTimeout   = 120 * time.Second
 )
 
 const suggestSystemPrompt = `You invent a short, descriptive title for a batch of staged files that will be uploaded to object storage under "YYYYMMDDhhmm-TITLE/".
-- Inspect file contents with the tools when the file names alone are not enough. read_file_as_text and read_file_as_image convert office documents, PDFs, and other formats automatically; you do not need to care about the conversion.
+- The file list may include a one-line "peek" at each text file's leading content; often the names and peeks are already enough — use the read tools only when you need more.
+- read_file_as_text and read_file_as_image convert office documents, PDFs, and other formats automatically; you do not need to care about the conversion.
 - The title should be a short phrase (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单".
 - If the contents contain a clear document date or datetime, call set_datetime with it (YYYY-MM-DD or YYYY-MM-DDTHH:mm). Do not guess. Call it before or in the same turn as set_title.
-- When you have decided, call set_title exactly once with the raw title.`
+- When you have decided, call set_title exactly once with the raw title. Decide quickly: reading every file is rarely necessary.`
 
 type chatImageURL struct {
 	URL string `json:"url"`
@@ -77,12 +81,14 @@ type chatRequest struct {
 	ReasoningEffort string        `json:"reasoning_effort,omitempty"`
 }
 
+type chatReplyMessage struct {
+	Content   string         `json:"content"`
+	ToolCalls []chatToolCall `json:"tool_calls"`
+}
+
 type chatResponse struct {
 	Choices []struct {
-		Message struct {
-			Content   string         `json:"content"`
-			ToolCalls []chatToolCall `json:"tool_calls"`
-		} `json:"message"`
+		Message chatReplyMessage `json:"message"`
 	} `json:"choices"`
 	Error *struct {
 		Message string `json:"message"`
@@ -130,16 +136,21 @@ var suggestTools = []chatTool{
 	}},
 }
 
+// suggestDecisionTools are the only tools offered when forcing a decision
+// after the read budget is spent (set_title and set_datetime).
+var suggestDecisionTools = suggestTools[2:]
+
 // suggestAgent runs the chat-completions tool loop against the configured
 // OpenAI-compatible endpoint.
 type suggestAgent struct {
-	cfg        LLMConfig
-	dir        string
-	http       *http.Client
-	title      string
-	when       string
-	onProgress func(jobProgress)
-	onState    func()
+	cfg         LLMConfig
+	dir         string
+	http        *http.Client
+	title       string
+	when        string
+	readsClosed bool
+	onProgress  func(jobProgress)
+	onState     func()
 }
 
 func (s *Server) handleUploadSuggest(w http.ResponseWriter, r *http.Request) {
@@ -194,45 +205,136 @@ func (a *suggestAgent) progress(p jobProgress) {
 	}
 }
 
+// setTitle persists the chosen title, keeping the pinned time.
+func (a *suggestAgent) setTitle(title string) error {
+	st := loadWorkspaceState(a.dir)
+	st.Title = title
+	if err := saveWorkspaceState(a.dir, st); err != nil {
+		return err
+	}
+	a.title = title
+	if a.onState != nil {
+		a.onState()
+	}
+	return nil
+}
+
+// textPeek returns a one-line peek at a staged file's leading text, or "" for
+// binaries and unreadable files. It never converts; the read tools remain for
+// anything the peek cannot cover.
+func textPeek(dir, name string) string {
+	name, err := sanitizeWorkspaceName(name)
+	if err != nil {
+		return ""
+	}
+	f, err := os.Open(filepath.Join(dir, name))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, suggestPeekMaxBytes+1))
+	if err != nil || len(data) == 0 || bytes.IndexByte(data, 0) >= 0 {
+		return ""
+	}
+	if len(data) > suggestPeekMaxBytes {
+		data = data[:suggestPeekMaxBytes]
+	}
+	// A peek cut mid-rune is not valid UTF-8; trim back to a valid prefix.
+	for len(data) > 0 && !utf8.Valid(data) {
+		data = data[:len(data)-1]
+	}
+	return strings.Join(strings.Fields(string(data)), " ")
+}
+
 func (a *suggestAgent) run(ctx context.Context, files []workspaceFile) (string, error) {
 	var b strings.Builder
 	b.WriteString("Files staged for upload:\n")
 	for _, f := range files {
 		fmt.Fprintf(&b, "- %s (%s)\n", f.Name, f.Size)
+		if peek := textPeek(a.dir, f.Name); peek != "" {
+			fmt.Fprintf(&b, "  peek: %s\n", peek)
+		}
 	}
 	messages := []chatMessage{
 		{Role: "system", Content: suggestSystemPrompt},
 		{Role: "user", Content: b.String()},
 	}
+	toolCalls := 0
 	for round := 0; round < suggestMaxRounds; round++ {
 		a.progress(jobProgress{
 			Message: fmt.Sprintf("round %d/%d", round+1, suggestMaxRounds),
 			Done:    round,
 			Total:   suggestMaxRounds,
 		})
-		resp, err := a.chat(ctx, messages)
+		msg, err := a.chatMessage(ctx, &messages, suggestTools)
 		if err != nil {
 			return "", err
 		}
-		if resp.Error != nil {
-			return "", errors.New(resp.Error.Message)
-		}
-		if len(resp.Choices) == 0 {
-			return "", errors.New("llm: empty response")
-		}
-		msg := resp.Choices[0].Message
-		messages = append(messages, chatMessage{Role: "assistant", Content: msg.Content, ToolCalls: msg.ToolCalls})
 		for _, tc := range msg.ToolCalls {
+			toolCalls++
 			messages = append(messages, a.runTool(ctx, tc)...)
 		}
 		if a.title != "" {
 			return a.title, nil
 		}
-		if len(msg.ToolCalls) == 0 {
+		if len(msg.ToolCalls) == 0 || toolCalls >= suggestMaxToolCalls {
 			break
 		}
 	}
+	// The read budget is spent: force a decision instead of giving up.
+	return a.finalize(ctx, messages)
+}
+
+// finalize closes file reading and asks for an immediate decision, so a large
+// batch cannot exhaust the round budget without a title. A plain-text answer
+// is accepted as a last resort.
+func (a *suggestAgent) finalize(ctx context.Context, messages []chatMessage) (string, error) {
+	a.readsClosed = true
+	messages = append(messages, chatMessage{
+		Role:    "user",
+		Content: "Stop reading files and decide now with what you have: call set_title with your best title (optionally set_datetime first).",
+	})
+	a.progress(jobProgress{Message: "deciding"})
+	msg, err := a.chatMessage(ctx, &messages, suggestDecisionTools)
+	if err != nil {
+		return "", err
+	}
+	for _, tc := range msg.ToolCalls {
+		messages = append(messages, a.runTool(ctx, tc)...)
+	}
+	if a.title != "" {
+		return a.title, nil
+	}
+	// Last resort: the model answered in plain text instead of set_title.
+	content := strings.TrimSpace(msg.Content)
+	if i := strings.IndexAny(content, "\r\n"); i >= 0 {
+		content = strings.TrimSpace(content[:i])
+	}
+	if title, err := sanitizePushTitle(content); err == nil {
+		if err := a.setTitle(title); err != nil {
+			return "", err
+		}
+		return title, nil
+	}
 	return "", errors.New("llm did not set a title")
+}
+
+// chatMessage performs one chat-completions round: it appends the assistant
+// message to messages and returns it.
+func (a *suggestAgent) chatMessage(ctx context.Context, messages *[]chatMessage, tools []chatTool) (chatReplyMessage, error) {
+	resp, err := a.chat(ctx, *messages, tools)
+	if err != nil {
+		return chatReplyMessage{}, err
+	}
+	if resp.Error != nil {
+		return chatReplyMessage{}, errors.New(resp.Error.Message)
+	}
+	if len(resp.Choices) == 0 {
+		return chatReplyMessage{}, errors.New("llm: empty response")
+	}
+	msg := resp.Choices[0].Message
+	*messages = append(*messages, chatMessage{Role: "assistant", Content: msg.Content, ToolCalls: msg.ToolCalls})
+	return msg, nil
 }
 
 // runTool executes one tool call and returns the message(s) to append: always
@@ -251,6 +353,9 @@ func (a *suggestAgent) runTool(ctx context.Context, tc chatToolCall) []chatMessa
 		return reply("invalid arguments: " + err.Error())
 	}
 	a.progress(jobProgress{Message: tc.Function.Name, File: args.Name})
+	if a.readsClosed && (tc.Function.Name == "read_file_as_text" || tc.Function.Name == "read_file_as_image") {
+		return reply("error: file reading is closed; call set_title now")
+	}
 	switch tc.Function.Name {
 	case "read_file_as_text":
 		text, err := readWorkspaceText(ctx, a.dir, args.Name)
@@ -275,14 +380,8 @@ func (a *suggestAgent) runTool(ctx context.Context, tc chatToolCall) []chatMessa
 		if title == "" {
 			return reply("error: empty title")
 		}
-		st := loadWorkspaceState(a.dir)
-		st.Title = title
-		if err := saveWorkspaceState(a.dir, st); err != nil {
+		if err := a.setTitle(title); err != nil {
 			return reply("error: " + err.Error())
-		}
-		a.title = title
-		if a.onState != nil {
-			a.onState()
 		}
 		return reply("title set")
 	case "set_datetime":
@@ -305,11 +404,11 @@ func (a *suggestAgent) runTool(ctx context.Context, tc chatToolCall) []chatMessa
 	}
 }
 
-func (a *suggestAgent) chat(ctx context.Context, messages []chatMessage) (*chatResponse, error) {
+func (a *suggestAgent) chat(ctx context.Context, messages []chatMessage, tools []chatTool) (*chatResponse, error) {
 	body, err := json.Marshal(chatRequest{
 		Model:           a.cfg.Model,
 		Messages:        messages,
-		Tools:           suggestTools,
+		Tools:           tools,
 		ReasoningEffort: a.cfg.Effort,
 	})
 	if err != nil {

@@ -11,7 +11,7 @@ Cookie-authenticated browser for an Aliyun OSS bucket. Listing goes through this
 - `GET /download` 302s to a 5-minute OSS GET URL (`Content-Disposition: attachment`)
 - Local upload workspace at `/upload` (list, drag-and-drop add with per-file progress, delete). Files stay on disk until pushed. Staging, title suggestion, and OSS push share a workspace lock and live progress over `GET /upload/events`.
 - One-click push of staged files to OSS under `YYYY/MM/YYYYMMDDhhmm-TITLE/` (async job, one at a time, live progress on the page).
-- One-click LLM title suggestion for staged files (async OpenAI-compatible tool loop: `read_file_as_text`, `read_file_as_image`, `set_datetime`, `set_title`). Office/PDF and odd or oversized images are converted at suggest-time inside the container.
+- One-click LLM title suggestion for staged files (async OpenAI-compatible tool loop: `read_file_as_text`, `read_file_as_image`, `set_datetime`, `set_title`). The initial prompt peeks at each text file's first 1 KiB so most batches need no read calls; if the read budget runs out, the model is forced to decide with read tools closed instead of failing. Office/PDF and odd or oversized images are converted at suggest-time inside the container.
 - SIGINT/SIGTERM stops accepting connections and waits for in-flight requests; a second signal terminates
 
 ## Quick start

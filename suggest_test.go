@@ -154,11 +154,36 @@ func TestUploadSuggestImageTool(t *testing.T) {
 	require.Equal(t, "screenshot", loadWorkspaceState(dir).Title)
 }
 
+func TestUploadSuggestTextAnswerFallback(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
+	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+		if call == 2 {
+			// The forced-decision round only offers set_title/set_datetime.
+			require.Len(t, req.Tools, 2)
+		}
+		// The model never calls set_title and answers in plain text.
+		return `{"choices":[{"message":{"role":"assistant","content":"weekly-report"}}]}`
+	})
+	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
+	cookie := loginCookie(t, h)
+	rec := postSuggest(t, h, cookie)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	awaitIdle(t, app)
+	require.Equal(t, "weekly-report", app.lastJob().Title)
+	require.Empty(t, app.lastJob().Error)
+	require.Equal(t, "weekly-report", loadWorkspaceState(dir).Title)
+}
+
 func TestUploadSuggestNoTitle(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("hi"), 0o644))
 	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
-		return `{"choices":[{"message":{"role":"assistant","content":"weekly-report"}}]}`
+		// Neither a tool call nor usable text: genuinely no title.
+		return `{"choices":[{"message":{"role":"assistant","content":""}}]}`
 	})
 	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
@@ -169,6 +194,87 @@ func TestUploadSuggestNoTitle(t *testing.T) {
 	awaitIdle(t, app)
 	require.Equal(t, "suggest failed", app.lastJob().Error)
 	require.Empty(t, loadWorkspaceState(cfg.Upload.Workspace).Title)
+}
+
+func TestUploadSuggestRoundBudgetForcesDecision(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
+	calls := 0
+	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+		calls = call
+		if call <= suggestMaxRounds {
+			// The model keeps reading the same file, burning every round.
+			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+				`{"id":"c","type":"function","function":{"name":"read_file_as_text","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
+		}
+		require.Equal(t, suggestMaxRounds+1, call)
+		require.Len(t, req.Tools, 2, "forced round drops the read tools")
+		nudged := false
+		for _, m := range req.Messages {
+			if s, ok := m.Content.(string); ok && m.Role == "user" && strings.Contains(s, "decide now") {
+				nudged = true
+			}
+		}
+		require.True(t, nudged)
+		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+			`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"forced\"}"}}]}}]}`
+	})
+	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
+	cookie := loginCookie(t, h)
+	rec := postSuggest(t, h, cookie)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	awaitIdle(t, app)
+	require.Equal(t, "forced", loadWorkspaceState(dir).Title)
+	require.Equal(t, suggestMaxRounds+1, calls)
+}
+
+func TestUploadSuggestPeeks(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "report.txt"), []byte("Q3 revenue\nsummary\nand outlook"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bin.dat"), []byte{'x', 0, 'y'}, 0o644))
+	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+		require.Equal(t, 1, call)
+		list := ""
+		for _, m := range req.Messages {
+			if s, ok := m.Content.(string); ok && m.Role == "user" && strings.Contains(s, "Files staged for upload") {
+				list = s
+			}
+		}
+		// Native text gets a one-line peek; the binary file gets none.
+		require.Contains(t, list, "peek: Q3 revenue summary and outlook")
+		require.Equal(t, 1, strings.Count(list, "peek:"))
+		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"q3-report\"}"}}]}}]}`
+	})
+	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
+	cookie := loginCookie(t, h)
+	rec := postSuggest(t, h, cookie)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	awaitIdle(t, app)
+	require.Equal(t, "q3-report", loadWorkspaceState(dir).Title)
+}
+
+func TestTextPeek(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\n world\t!"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bin.dat"), []byte{'a', 0}, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "empty.txt"), nil, 0o644))
+
+	require.Equal(t, "hello world !", textPeek(dir, "a.txt"))
+	require.Empty(t, textPeek(dir, "bin.dat"))
+	require.Empty(t, textPeek(dir, "empty.txt"))
+	require.Empty(t, textPeek(dir, "missing.txt"))
+	require.Empty(t, textPeek(dir, "../secret"))
+
+	long := strings.Repeat("x", suggestPeekMaxBytes+100)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "long.txt"), []byte(long), 0o644))
+	require.Len(t, textPeek(dir, "long.txt"), suggestPeekMaxBytes)
 }
 
 func TestUnmarshalToolArgs(t *testing.T) {
