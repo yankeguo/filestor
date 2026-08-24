@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>filestor — sign in</title>
+  {{template "head" .}}
+</head>
+<body class="d-flex min-vh-100 align-items-center justify-content-center">
+  <form class="card" style="width:min(360px,92vw)" method="post" action="/login">
+    <div class="card-body vstack gap-3 p-4">
+      <h1 class="h4 mb-0"><i class="bi bi-folder2-open"></i> filestor</h1>
+      <p class="text-secondary mb-0">Sign in</p>
+      {{if .Error}}<p class="text-danger mb-0">{{.Error}}</p>{{end}}
+      <div>
+        <label class="form-label" for="username"><i class="bi bi-person"></i> Username</label>
+        <input class="form-control" id="username" name="username" autocomplete="username" required autofocus>
+      </div>
+      <div>
+        <label class="form-label" for="password"><i class="bi bi-lock"></i> Password</label>
+        <input class="form-control" id="password" type="password" name="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn btn-primary"><i class="bi bi-box-arrow-in-right"></i> Sign in</button>
+    </div>
+  </form>
+</body>
+</html>
