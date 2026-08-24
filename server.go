@@ -114,15 +114,57 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "object store unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	prefix := normalizePrefix(r.URL.Query().Get("prefix"))
-	marker := r.URL.Query().Get("marker")
-	page, err := s.store.List(prefix, marker)
+	q := r.URL.Query()
+	// Contents view: a concrete prefix lists its directories and objects.
+	if p := q.Get("prefix"); p != "" {
+		prefix := normalizePrefix(p)
+		page, err := s.store.List(prefix, q.Get("marker"))
+		if err != nil {
+			log.Println("list objects:", err)
+			http.Error(w, "list failed", http.StatusBadGateway)
+			return
+		}
+		data := buildBrowseData(prefix, page)
+		data.Contents = true
+		s.render(w, "home.html", data)
+		return
+	}
+	// Calendar view over the fixed YYYY/MM/YYYYMMDDhhmm-TITLE/ layout.
+	now := time.Now()
+	var day time.Time
+	if d := q.Get("day"); d != "" {
+		if parsed, err := time.ParseInLocation(browseDayLayout, d, time.Local); err == nil {
+			day = parsed
+		}
+	}
+	var month time.Time
+	if m := q.Get("month"); m != "" {
+		if parsed, err := time.ParseInLocation(browseMonthLayout, m, time.Local); err == nil {
+			month = parsed
+		}
+	}
+	if month.IsZero() {
+		if !day.IsZero() {
+			month = day
+		} else {
+			month = now
+		}
+	}
+	month = time.Date(month.Year(), month.Month(), 1, 0, 0, 0, 0, time.Local)
+	// Landing on /browse selects today; a day outside the displayed month is
+	// dropped rather than shown against the wrong calendar.
+	if q.Get("month") == "" && q.Get("day") == "" {
+		day = now
+	} else if !day.IsZero() && (day.Year() != month.Year() || day.Month() != month.Month()) {
+		day = time.Time{}
+	}
+	dirs, err := listAllDirs(s.store, month.Format("2006/01/"))
 	if err != nil {
 		log.Println("list objects:", err)
 		http.Error(w, "list failed", http.StatusBadGateway)
 		return
 	}
-	s.render(w, "home.html", buildBrowseData(prefix, page))
+	s.render(w, "home.html", buildBrowseCalendar(month, day, dirs, now))
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {

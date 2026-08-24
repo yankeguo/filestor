@@ -101,8 +101,8 @@ func TestLoginAndGuard(t *testing.T) {
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "Name")
-	require.Contains(t, rec.Body.String(), "No objects")
+	require.Contains(t, rec.Body.String(), ">Mo</th>")
+	require.Contains(t, rec.Body.String(), "No records on this day.")
 
 	req = httptest.NewRequest(http.MethodGet, "/browse", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: cookie.Value + "tamper"})

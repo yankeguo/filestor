@@ -24,6 +24,7 @@ type fakeStore struct {
 	err      error
 	lastList [2]string
 	lastKey  string
+	listFn   func(prefix, marker string) (ListPage, error)
 
 	putErr   error
 	putHook  func(key string)
@@ -34,6 +35,9 @@ type fakeStore struct {
 
 func (f *fakeStore) List(prefix, marker string) (ListPage, error) {
 	f.lastList = [2]string{prefix, marker}
+	if f.listFn != nil {
+		return f.listFn(prefix, marker)
+	}
 	return f.page, f.err
 }
 
@@ -78,14 +82,8 @@ func (f *fakeStore) putKeys() []string {
 	return keys
 }
 
-func TestBrowseListsDirsAndFiles(t *testing.T) {
-	store := &fakeStore{page: ListPage{
-		Prefixes: []string{"docs/"},
-		Objects: []ObjectInfo{
-			{Key: "readme.txt", Size: 12, LastModified: time.Date(2026, 8, 24, 4, 0, 0, 0, time.UTC)},
-		},
-	}}
-	h := NewServer(testCfg(), store).Handler()
+func TestBrowseCalendarLanding(t *testing.T) {
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
 	cookie := loginCookie(t, h)
 
 	req := httptest.NewRequest(http.MethodGet, "/browse", nil)
@@ -94,11 +92,118 @@ func TestBrowseListsDirsAndFiles(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
-	require.Contains(t, body, "docs")
-	require.Contains(t, body, `href="/browse?prefix=docs%2f"`)
-	require.Contains(t, body, "readme.txt")
-	require.Contains(t, body, `/download?key=readme.txt`)
-	require.Equal(t, "", store.lastList[0])
+	require.Contains(t, body, ">Mo</th>")
+	require.Contains(t, body, time.Now().Format("January 2006"))
+	// Landing selects today.
+	require.Contains(t, body, time.Now().Format(browseDayLayout))
+}
+
+func TestBrowseCalendarHighlightsAndListsDay(t *testing.T) {
+	store := &fakeStore{page: ListPage{
+		Prefixes: []string{
+			"2026/08/202608240659-weekly-report/",
+			"2026/08/202608241200-monthly-billing/",
+			"2026/08/202608101015-发票/",
+			"2026/08/legacy-dir/",
+		},
+	}}
+	h := NewServer(testCfg(), store).Handler()
+	cookie := loginCookie(t, h)
+
+	req := httptest.NewRequest(http.MethodGet, "/browse?month=2026-08&day=2026-08-24", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "2026/08/", store.lastList[0])
+	body := rec.Body.String()
+	require.Contains(t, body, "August 2026")
+	// Days with records link back to the day view.
+	require.Contains(t, body, `/browse?month=2026-08&day=2026-08-24`)
+	require.Contains(t, body, `day=2026-08-10`)
+	// Non-conforming directories are not counted.
+	require.NotContains(t, body, "legacy-dir")
+	// The selected day lists its directories with parsed time and title.
+	require.Contains(t, body, "06:59")
+	require.Contains(t, body, "weekly-report")
+	require.Contains(t, body, "12:00")
+	require.Contains(t, body, "monthly-billing")
+	require.Contains(t, body, `/browse?prefix=2026%2f08%2f202608240659-weekly-report%2f`)
+	// Directories from other days are not listed in the day pane.
+	require.NotContains(t, body, "10:15")
+}
+
+func TestBrowseCalendarDayOutsideMonthDropped(t *testing.T) {
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/browse?month=2026-09&day=2026-08-24", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "September 2026")
+	require.Contains(t, body, "Select a day")
+	require.NotContains(t, body, "2026-08-24")
+}
+
+func TestBrowseCalendarFollowsPagination(t *testing.T) {
+	store := &fakeStore{listFn: func(prefix, marker string) (ListPage, error) {
+		require.Equal(t, "2026/08/", prefix)
+		if marker == "" {
+			return ListPage{
+				Prefixes:    []string{"2026/08/202608011200-a/"},
+				IsTruncated: true,
+				NextMarker:  "2026/08/202608011200-a/",
+			}, nil
+		}
+		require.Equal(t, "2026/08/202608011200-a/", marker)
+		return ListPage{Prefixes: []string{"2026/08/202608311200-b/"}}, nil
+	}}
+	h := NewServer(testCfg(), store).Handler()
+	cookie := loginCookie(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/browse?month=2026-08", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "day=2026-08-01")
+	require.Contains(t, body, "day=2026-08-31")
+}
+
+func TestSplitDayDir(t *testing.T) {
+	hm, title := splitDayDir("202608240659-weekly-report")
+	require.Equal(t, "06:59", hm)
+	require.Equal(t, "weekly-report", title)
+
+	hm, title = splitDayDir("legacy-dir")
+	require.Equal(t, "", hm)
+	require.Equal(t, "legacy-dir", title)
+}
+
+func TestBuildBrowseCalendarGrid(t *testing.T) {
+	// August 2026 starts on a Saturday and has 31 days.
+	month := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.Local)
+	d := buildBrowseCalendar(month, now, []string{"2026/08/202608240659-x/"}, now)
+	require.Equal(t, "2026-08", d.Month)
+	require.Equal(t, "2026-07", d.PrevMonth)
+	require.Equal(t, "2026-09", d.NextMonth)
+	// Monday-first grid: the 1st (Saturday) sits in column 5.
+	require.Equal(t, 1, d.Weeks[0][5].Day)
+	require.Equal(t, 0, d.Weeks[0][4].Day)
+	// The 31st lands in the first column of the last week.
+	last := d.Weeks[len(d.Weeks)-1]
+	require.Equal(t, 31, last[0].Day)
+	// The selected day is flagged, highlighted with its record, and listed.
+	// (2026-08-24 is the Monday of the fifth row.)
+	sel := d.Weeks[4][0]
+	require.Equal(t, 24, sel.Day)
+	require.True(t, sel.Selected)
+	require.True(t, sel.Today)
+	require.Equal(t, 1, sel.Records)
+	require.Equal(t, []calDir{{Time: "06:59", Title: "x", Prefix: "2026/08/202608240659-x/"}}, d.DayDirs)
 }
 
 func TestBrowsePrefixAndParent(t *testing.T) {
@@ -128,7 +233,7 @@ func TestBrowseNextPage(t *testing.T) {
 	h := NewServer(testCfg(), store).Handler()
 	cookie := loginCookie(t, h)
 
-	req := httptest.NewRequest(http.MethodGet, "/browse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/browse?prefix=docs", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

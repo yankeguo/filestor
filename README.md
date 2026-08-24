@@ -7,7 +7,7 @@ Cookie-authenticated browser for an Aliyun OSS bucket. Listing goes through this
 - Standard `net/http` server
 - YAML config: `admin.{username,password}`, `aliyun.oss.{endpoint,bucket,access_key_id,access_key_secret}`, optional `upload.workspace` and `llm.{url,model,effort,headers}`
 - Cookie login (HMAC, HttpOnly, SameSite=Lax)
-- Prefix listing treated as folders (`Delimiter=/`)
+- Calendar browse at `/browse`: monthly grid (weeks start Monday) with days holding records highlighted; pick a day to list its record directories, click through to browse contents
 - `GET /download` 302s to a 5-minute OSS GET URL (`Content-Disposition: attachment`)
 - Local upload workspace at `/upload` (list, drag-and-drop add with per-file progress, delete). Files stay on disk until pushed. Staging, title suggestion, and OSS push share a workspace lock and live progress over `GET /upload/events`.
 - One-click push of staged files to OSS under `YYYY/MM/YYYYMMDDhhmm-TITLE/` (async job, one at a time, live progress on the page).
@@ -82,7 +82,9 @@ All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,acce
 | `GET` | `/` | no | 302 to `/browse` |
 | `GET`/`POST` | `/login` | no | Sign-in; already logged in → `/browse` |
 | `POST` | `/logout` | cookie | Clear session, 302 to `/login` |
-| `GET` | `/browse?prefix=&marker=` | cookie | List current prefix (`Delimiter=/`, 200 keys per page) |
+| `GET` | `/browse` | cookie | Calendar of the current month over `YYYY/MM/…`; days with records highlighted, today selected |
+| `GET` | `/browse?month=YYYY-MM&day=YYYY-MM-DD` | cookie | Calendar for that month plus the day's record directories |
+| `GET` | `/browse?prefix=&marker=` | cookie | Contents view for one prefix (`Delimiter=/`, 200 keys per page) |
 | `GET` | `/download?key=` | cookie | Sign a 5-minute GET URL and 302 to OSS |
 | `GET` | `/upload` | cookie | Local workspace page (EventSource `/upload/events`) |
 | `GET` | `/upload/events` | cookie | SSE: `snapshot`, `lock`, `files`, `state`, `progress`, `done`, `error`; lagging subscribers are dropped so EventSource reconnects to a fresh snapshot |
@@ -93,7 +95,7 @@ All of `admin.username`, `admin.password`, and `aliyun.oss.{endpoint,bucket,acce
 | `POST` | `/upload/suggest` | cookie | Start async LLM title suggestion (202; 409 if locked); result over SSE |
 | `POST` | `/upload/push` | cookie | Form `time` (`YYYY-MM-DDTHH:mm`) + `title`; starts the async OSS push (409 if locked) |
 
-Folder rows are common prefixes; files skip the placeholder object whose key equals the current prefix. `/upload` only manages a local staging directory (flat files only: no folders, no hidden files starting with `.`; names are basenames). Pushing uploads every staged file to `YYYY/MM/YYYYMMDDhhmm-TITLE/<name>` in the bucket — the picked time is used as-is regardless of timezone, and the title is sanitized to `[-_.A-Za-z0-9]` plus CJK letters with other chars folded to `-`. Each file is removed from staging once it lands; on failure the job stops and the remaining files stay staged. The first staged file pins the push datetime (and any edited time/title) in `.upload-state.json` inside the workspace, so a page reload keeps them; the state is cleared when the staging area empties (all deleted, or a successful push with nothing left). The Suggest button is shown only when `llm.url` is configured. There is no search.
+The calendar assumes the fixed layout pushed by `/upload` (`YYYY/MM/YYYYMMDDhhmm-TITLE/`): directories are counted per day from the first 8 digits of their name and shown as `hh:mm` + title; non-conforming names are ignored by the calendar but still reachable from the contents view. Folder rows there are common prefixes; files skip the placeholder object whose key equals the current prefix. `/upload` only manages a local staging directory (flat files only: no folders, no hidden files starting with `.`; names are basenames). Pushing uploads every staged file to `YYYY/MM/YYYYMMDDhhmm-TITLE/<name>` in the bucket — the picked time is used as-is regardless of timezone, and the title is sanitized to `[-_.A-Za-z0-9]` plus CJK letters with other chars folded to `-`. Each file is removed from staging once it lands; on failure the job stops and the remaining files stay staged. The first staged file pins the push datetime (and any edited time/title) in `.upload-state.json` inside the workspace, so a page reload keeps them; the state is cleared when the staging area empties (all deleted, or a successful push with nothing left). The Suggest button is shown only when `llm.url` is configured. There is no search.
 
 ## Docker / GHCR
 
