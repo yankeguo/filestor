@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,7 @@ type fakeStore struct {
 	page     ListPage
 	signed   string
 	err      error
+	listMu   sync.Mutex
 	lastList [2]string
 	lastKey  string
 	listFn   func(prefix, marker string) (ListPage, error)
@@ -37,11 +39,22 @@ type fakeStore struct {
 }
 
 func (f *fakeStore) List(prefix, marker string) (ListPage, error) {
+	f.listMu.Lock()
 	f.lastList = [2]string{prefix, marker}
+	f.listMu.Unlock()
 	if f.listFn != nil {
 		return f.listFn(prefix, marker)
 	}
 	return f.page, f.err
+}
+
+// lastListCall returns the most recent List call (which month finished last
+// is nondeterministic for the year fan-out, so calendar tests must not rely
+// on it).
+func (f *fakeStore) lastListCall() [2]string {
+	f.listMu.Lock()
+	defer f.listMu.Unlock()
+	return f.lastList
 }
 
 func (f *fakeStore) SignGetURL(key string, ttl time.Duration) (string, error) {
@@ -113,13 +126,16 @@ func TestBrowseCalendarLanding(t *testing.T) {
 }
 
 func TestBrowseCalendarHighlightsAndListsDay(t *testing.T) {
-	store := &fakeStore{page: ListPage{
-		Prefixes: []string{
+	store := &fakeStore{listFn: func(prefix, marker string) (ListPage, error) {
+		if prefix != "2026/08/" {
+			return ListPage{}, nil
+		}
+		return ListPage{Prefixes: []string{
 			"2026/08/202608240659-weekly-report/",
 			"2026/08/202608241200-monthly-billing/",
 			"2026/08/202608101015-发票/",
 			"2026/08/legacy-dir/",
-		},
+		}}, nil
 	}}
 	h := NewServer(testCfg(), store).Handler()
 	cookie := loginCookie(t, h)
@@ -129,22 +145,24 @@ func TestBrowseCalendarHighlightsAndListsDay(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, "2026/08/", store.lastList[0])
 	body := rec.Body.String()
 	require.Contains(t, body, "August 2026")
-	// Days with bundles link back to the day view.
-	require.Contains(t, body, `/browse?month=2026-08&day=2026-08-24`)
-	require.Contains(t, body, `day=2026-08-10`)
+	// Days with bundles link back to the day view, anchored to the year list.
+	require.Contains(t, body, `/browse?month=2026-08&day=2026-08-24#day-2026-08-24`)
+	require.Contains(t, body, `day=2026-08-10#day-2026-08-10`)
 	// Non-conforming directories are not counted.
 	require.NotContains(t, body, "legacy-dir")
-	// The selected day lists its directories with parsed time and title.
+	// The year list groups every day of the year with parsed time and title.
+	require.Contains(t, body, `id="day-2026-08-24"`)
+	require.Contains(t, body, `id="day-2026-08-10"`)
 	require.Contains(t, body, "06:59")
 	require.Contains(t, body, "weekly-report")
 	require.Contains(t, body, "12:00")
 	require.Contains(t, body, "monthly-billing")
 	require.Contains(t, body, `/browse?prefix=2026%2f08%2f202608240659-weekly-report%2f`)
-	// Directories from other days are not listed in the day pane.
-	require.NotContains(t, body, "10:15")
+	// Other days of the year appear too (not only the selected one).
+	require.Contains(t, body, "10:15")
+	require.Contains(t, body, "发票")
 }
 
 func TestBrowseCalendarDayOutsideMonthDropped(t *testing.T) {
@@ -157,13 +175,23 @@ func TestBrowseCalendarDayOutsideMonthDropped(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	require.Contains(t, body, "September 2026")
-	require.Contains(t, body, "Select a day")
+	// The dropped day selects nothing: no group and no hint.
 	require.NotContains(t, body, "2026-08-24")
+	require.NotContains(t, body, `class="browse-day`)
+	require.Contains(t, body, "No bundles this year.")
 }
 
 func TestBrowseCalendarFollowsPagination(t *testing.T) {
+	type call struct{ prefix, marker string }
+	var mu sync.Mutex
+	var calls []call
 	store := &fakeStore{listFn: func(prefix, marker string) (ListPage, error) {
-		require.Equal(t, "2026/08/", prefix)
+		mu.Lock()
+		calls = append(calls, call{prefix, marker})
+		mu.Unlock()
+		if prefix != "2026/08/" {
+			return ListPage{}, nil
+		}
 		if marker == "" {
 			return ListPage{
 				Prefixes:    []string{"2026/08/202608011200-a/"},
@@ -171,7 +199,6 @@ func TestBrowseCalendarFollowsPagination(t *testing.T) {
 				NextMarker:  "2026/08/202608011200-a/",
 			}, nil
 		}
-		require.Equal(t, "2026/08/202608011200-a/", marker)
 		return ListPage{Prefixes: []string{"2026/08/202608311200-b/"}}, nil
 	}}
 	h := NewServer(testCfg(), store).Handler()
@@ -184,6 +211,15 @@ func TestBrowseCalendarFollowsPagination(t *testing.T) {
 	body := rec.Body.String()
 	require.Contains(t, body, "day=2026-08-01")
 	require.Contains(t, body, "day=2026-08-31")
+	// Pagination resumes from the last listed prefix; the year fan-out lists
+	// every other month once, without a marker.
+	require.Contains(t, calls, call{"2026/08/", ""})
+	require.Contains(t, calls, call{"2026/08/", "2026/08/202608011200-a/"})
+	for _, c := range calls {
+		if c.prefix != "2026/08/" {
+			require.Empty(t, c.marker, c.prefix)
+		}
+	}
 }
 
 func TestSplitDayDir(t *testing.T) {
@@ -200,10 +236,16 @@ func TestBuildBrowseCalendarGrid(t *testing.T) {
 	// August 2026 starts on a Saturday and has 31 days.
 	month := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.Local)
-	d := buildBrowseCalendar(month, now, []string{"2026/08/202608240659-x/"}, now)
+	yearDirs := []string{
+		"2026/07/202607101200-y/",
+		"2026/08/202608240659-x/",
+		"2026/08/legacy-dir/",
+	}
+	d := buildBrowseCalendar(month, now, yearDirs, now)
 	require.Equal(t, "2026-08", d.Month)
 	require.Equal(t, "2026-07", d.PrevMonth)
 	require.Equal(t, "2026-09", d.NextMonth)
+	require.Equal(t, "2026", d.Year)
 	// Monday-first grid: the 1st (Saturday) sits in column 5.
 	require.Equal(t, 1, d.Weeks[0][5].Day)
 	require.Equal(t, 0, d.Weeks[0][4].Day)
@@ -217,7 +259,56 @@ func TestBuildBrowseCalendarGrid(t *testing.T) {
 	require.True(t, sel.Selected)
 	require.True(t, sel.Today)
 	require.Equal(t, 1, sel.Bundles)
-	require.Equal(t, []calDir{{Time: "06:59", Title: "x", Prefix: "2026/08/202608240659-x/"}}, d.DayDirs)
+	// Only the month's own dirs count towards the calendar cells.
+	for _, week := range d.Weeks {
+		for _, day := range week {
+			if day.Day == 10 {
+				require.Zero(t, day.Bundles)
+			}
+		}
+	}
+	// The year list groups every day of the year, newest first; the selected
+	// (also today) group is flagged.
+	require.Equal(t, []calDayGroup{
+		{Date: "2026-08-24", Bundles: []calDir{{Time: "06:59", Title: "x", Prefix: "2026/08/202608240659-x/"}}, Selected: true, Today: true},
+		{Date: "2026-07-10", Bundles: []calDir{{Time: "12:00", Title: "y", Prefix: "2026/07/202607101200-y/"}}},
+	}, d.DayGroups)
+	require.False(t, d.SelectedMissing)
+}
+
+func TestBuildBrowseCalendarSelectedMissing(t *testing.T) {
+	month := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.Local)
+	selected := time.Date(2026, 8, 10, 0, 0, 0, 0, time.Local)
+	d := buildBrowseCalendar(month, selected, []string{"2026/08/202608240659-x/"}, now)
+	require.Equal(t, "2026-08-10", d.SelectedDay)
+	require.True(t, d.SelectedMissing)
+}
+
+func TestListYearDirs(t *testing.T) {
+	store := &fakeStore{listFn: func(prefix, marker string) (ListPage, error) {
+		switch prefix {
+		case "2026/03/":
+			return ListPage{Prefixes: []string{"2026/03/202603011200-a/"}}, nil
+		case "2026/11/":
+			return ListPage{Prefixes: []string{"2026/11/202611022359-b/", "2026/11/202611030100-c/"}}, nil
+		default:
+			return ListPage{}, nil
+		}
+	}}
+	dirs, err := listYearDirs(store, 2026)
+	require.NoError(t, err)
+	// Months concatenate in calendar order.
+	require.Equal(t, []string{
+		"2026/03/202603011200-a/",
+		"2026/11/202611022359-b/",
+		"2026/11/202611030100-c/",
+	}, dirs)
+
+	store.err = errors.New("boom")
+	store.listFn = nil
+	_, err = listYearDirs(store, 2026)
+	require.Error(t, err)
 }
 
 func TestBrowsePrefixAndParent(t *testing.T) {
@@ -232,7 +323,7 @@ func TestBrowsePrefixAndParent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, "docs/", store.lastList[0])
+	require.Equal(t, "docs/", store.lastListCall()[0])
 	require.Contains(t, rec.Body.String(), `href="/browse"`)
 	require.Contains(t, rec.Body.String(), "a.txt")
 	require.Contains(t, rec.Body.String(), `/download?key=docs%2fa.txt`)
@@ -269,7 +360,7 @@ func TestBrowseBundleView(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, "2026/08/202608240659-weekly-report/", store.lastList[0])
+	require.Equal(t, "2026/08/202608240659-weekly-report/", store.lastListCall()[0])
 	body := rec.Body.String()
 	// Dedicated header: parsed title, date and time, back link to the day.
 	require.Contains(t, body, "<h4 class=\"mb-1\">weekly-report</h4>")

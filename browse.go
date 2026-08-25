@@ -4,6 +4,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -61,7 +62,11 @@ type browseData struct {
 	NextMonth   string
 	Weeks       [][7]calDay
 	SelectedDay string
-	DayDirs     []calDir
+	// SelectedMissing marks a selected day that has no bundles, so the year
+	// list has no group to highlight for it.
+	SelectedMissing bool
+	Year            string
+	DayGroups       []calDayGroup
 }
 
 // calDay is one calendar cell; Day == 0 is a blank filler cell.
@@ -73,11 +78,20 @@ type calDay struct {
 	Selected bool
 }
 
-// calDir is one bundle listed for the selected day.
+// calDir is one bundle listed for a day.
 type calDir struct {
 	Time   string
 	Title  string
 	Prefix string
+}
+
+// calDayGroup is one day of the year list: all bundles under one YYYYMMDD
+// date. The list is rendered newest days first.
+type calDayGroup struct {
+	Date     string // YYYY-MM-DD
+	Bundles  []calDir
+	Selected bool
+	Today    bool
 }
 
 func normalizePrefix(p string) string {
@@ -320,6 +334,35 @@ func listAllDirs(store ObjectStore, prefix string) ([]string, error) {
 	return dirs, nil
 }
 
+// listYearDirs returns every bundle directory of one year. The "YYYY/" prefix
+// only yields month-level common prefixes, so the year fans out into 12 month
+// listings; months are listed concurrently and concatenated in calendar
+// order. The first month error wins.
+func listYearDirs(store ObjectStore, year int) ([]string, error) {
+	perMonth := make([][]string, 12)
+	errs := make([]error, 12)
+	var wg sync.WaitGroup
+	for m := 1; m <= 12; m++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			prefix := time.Date(year, time.Month(m), 1, 0, 0, 0, 0, time.UTC).Format("2006/01/")
+			dirs, err := listAllDirs(store, prefix)
+			perMonth[m-1] = dirs
+			errs[m-1] = err
+		}()
+	}
+	wg.Wait()
+	var out []string
+	for m := 0; m < 12; m++ {
+		if errs[m] != nil {
+			return nil, errs[m]
+		}
+		out = append(out, perMonth[m]...)
+	}
+	return out, nil
+}
+
 func isDigits(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] < '0' || s[i] > '9' {
@@ -338,28 +381,46 @@ func splitDayDir(name string) (hm, title string) {
 	return "", name
 }
 
-// buildBrowseCalendar renders one month of the fixed bundle layout
-// (YYYY/MM/YYYYMMDDhhmm-TITLE/): dirs are the common prefixes under the
-// month's "YYYY/MM/" prefix.
-// A zero selected time shows the month without a day list.
-func buildBrowseCalendar(month time.Time, selected time.Time, dirs []string, now time.Time) browseData {
+// buildBrowseCalendar renders the calendar for one month plus the year list
+// of bundle day groups (newest first). yearDirs holds every bundle directory
+// of the month's year under the fixed YYYY/MM/YYYYMMDDhhmm-TITLE/ layout;
+// only the month's own dirs count towards the calendar cells. A zero
+// selected time shows the month without a selected day.
+func buildBrowseCalendar(month time.Time, selected time.Time, yearDirs []string, now time.Time) browseData {
 	monthPrefix := month.Format("2006/01/")
 	selectedKey := ""
 	if !selected.IsZero() {
 		selectedKey = selected.Format("20060102")
 	}
+	todayKey := now.Format("20060102")
 	counts := map[string]int{}
-	var dayDirs []calDir
-	for _, full := range dirs {
-		name := entryName(full, monthPrefix)
+	groupsByKey := map[string]*calDayGroup{}
+	var ordered []*calDayGroup
+	for _, full := range yearDirs {
+		// Strip the fixed "YYYY/MM/" head (8 bytes) to get the dir name.
+		if len(full) < 9 {
+			continue
+		}
+		name := strings.TrimSuffix(full[8:], "/")
 		if len(name) < 8 || !isDigits(name[:8]) {
 			continue
 		}
-		counts[name[:8]]++
-		if name[:8] == selectedKey {
-			hm, title := splitDayDir(name)
-			dayDirs = append(dayDirs, calDir{Time: hm, Title: title, Prefix: full})
+		dayKey := name[:8]
+		if strings.HasPrefix(full, monthPrefix) {
+			counts[dayKey]++
 		}
+		g := groupsByKey[dayKey]
+		if g == nil {
+			g = &calDayGroup{
+				Date:     dayKey[:4] + "-" + dayKey[4:6] + "-" + dayKey[6:8],
+				Selected: dayKey == selectedKey,
+				Today:    dayKey == todayKey,
+			}
+			groupsByKey[dayKey] = g
+			ordered = append(ordered, g)
+		}
+		hm, title := splitDayDir(name)
+		g.Bundles = append(g.Bundles, calDir{Time: hm, Title: title, Prefix: full})
 	}
 	data := browseData{
 		Nav:        "browse",
@@ -367,16 +428,22 @@ func buildBrowseCalendar(month time.Time, selected time.Time, dirs []string, now
 		MonthLabel: month.Format("January 2006"),
 		PrevMonth:  month.AddDate(0, -1, 0).Format(browseMonthLayout),
 		NextMonth:  month.AddDate(0, 1, 0).Format(browseMonthLayout),
-		DayDirs:    dayDirs,
+		Year:       month.Format("2006"),
+	}
+	// yearDirs arrive in calendar order; the year list shows newest days first.
+	for i := len(ordered) - 1; i >= 0; i-- {
+		data.DayGroups = append(data.DayGroups, *ordered[i])
 	}
 	if !selected.IsZero() {
 		data.SelectedDay = selected.Format(browseDayLayout)
+		if groupsByKey[selectedKey] == nil {
+			data.SelectedMissing = true
+		}
 	}
 	// Grid with weeks starting Monday; Day == 0 cells are blank fillers.
 	first := time.Date(month.Year(), month.Month(), 1, 0, 0, 0, 0, month.Location())
 	offset := (int(first.Weekday()) + 6) % 7
 	daysInMonth := first.AddDate(0, 1, -1).Day()
-	todayKey := now.Format("20060102")
 	var week [7]calDay
 	flush := func() {
 		data.Weeks = append(data.Weeks, week)

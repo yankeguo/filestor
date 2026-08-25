@@ -166,7 +166,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	} else if !day.IsZero() && (day.Year() != month.Year() || day.Month() != month.Month()) {
 		day = time.Time{}
 	}
-	dirs, err := listAllDirs(s.store, month.Format("2006/01/"))
+	dirs, err := listYearDirs(s.store, month.Year())
 	if err != nil {
 		log.Println("list objects:", err)
 		http.Error(w, "list failed", http.StatusBadGateway)
