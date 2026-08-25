@@ -18,13 +18,31 @@ import (
 )
 
 const (
-	analyzeMaxRounds     = 16
-	analyzeMaxToolCalls  = 24
-	analyzeTextMaxBytes  = 64 << 10
-	analyzeImageMaxBytes = 8 << 20
-	analyzePeekMaxBytes  = 1 << 10
-	analyzeHTTPTimeout   = 120 * time.Second
+	analyzeBaseRounds       = 16
+	analyzeRoundsPerFile    = 1 // per staged file beyond the first
+	analyzeRoundsCap        = 64
+	analyzeBaseToolCalls    = 24
+	analyzeToolCallsPerFile = 2 // a read plus an occasional rename per extra file
+	analyzeToolCallsCap     = 256
+	analyzeTextMaxBytes     = 64 << 10
+	analyzeImageMaxBytes    = 8 << 20
+	analyzePeekMaxBytes     = 1 << 10
+	analyzeHTTPTimeout      = 120 * time.Second
 )
+
+// analyzeBudget scales the round and tool-call budgets with the staged file
+// count: a single file gets the base budget, every extra file adds a bit more
+// (bounded by the caps), so a large batch has room to read and rename each
+// file without exhausting the loop.
+func analyzeBudget(files int) (rounds, toolCalls int) {
+	extra := files - 1
+	if extra < 0 {
+		extra = 0
+	}
+	rounds = min(analyzeBaseRounds+analyzeRoundsPerFile*extra, analyzeRoundsCap)
+	toolCalls = min(analyzeBaseToolCalls+analyzeToolCallsPerFile*extra, analyzeToolCallsCap)
+	return rounds, toolCalls
+}
 
 const analyzeSystemPrompt = `You invent a short, descriptive title for a batch of staged files that will be uploaded to object storage under a bundle directory named "YYYYMMDDhhmm-TITLE/".
 - The file list may include a one-line "peek" at each text file's leading content; often the names and peeks are already enough — use the read tools only when you need more.
@@ -156,15 +174,17 @@ var analyzeDecisionTools = analyzeTools[3:]
 // analyzeAgent runs the chat-completions tool loop against the configured
 // OpenAI-compatible endpoint.
 type analyzeAgent struct {
-	cfg         LLMConfig
-	dir         string
-	http        *http.Client
-	title       string
-	when        string
-	readsClosed bool
-	onProgress  func(jobProgress)
-	onState     func()
-	onFiles     func()
+	cfg          LLMConfig
+	dir          string
+	http         *http.Client
+	maxRounds    int
+	maxToolCalls int
+	title        string
+	when         string
+	readsClosed  bool
+	onProgress   func(jobProgress)
+	onState      func()
+	onFiles      func()
 }
 
 func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
@@ -187,10 +207,15 @@ func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
 		workspaceBusy(w)
 		return
 	}
+	// The budget scales with the batch size; staging is locked for the whole
+	// run, so the file count cannot change underneath the loop.
+	rounds, toolCalls := analyzeBudget(len(files))
 	ag := &analyzeAgent{
-		cfg:  s.Config.LLM,
-		dir:  dir,
-		http: &http.Client{Timeout: analyzeHTTPTimeout},
+		cfg:          s.Config.LLM,
+		dir:          dir,
+		http:         &http.Client{Timeout: analyzeHTTPTimeout},
+		maxRounds:    rounds,
+		maxToolCalls: toolCalls,
 		onProgress: func(p jobProgress) {
 			p.Kind = lockAnalyze
 			s.emitProgress(p, false)
@@ -202,7 +227,7 @@ func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
 			s.emitFiles()
 		},
 	}
-	s.emitProgress(jobProgress{Kind: lockAnalyze, Message: "starting", Total: analyzeMaxRounds}, false)
+	s.emitProgress(jobProgress{Kind: lockAnalyze, Message: "starting", Total: rounds}, false)
 	go func() {
 		defer s.release(lockAnalyze)
 		title, err := ag.run(context.Background(), files)
@@ -285,11 +310,11 @@ func (a *analyzeAgent) run(ctx context.Context, files []workspaceFile) (string, 
 		{Role: "user", Content: b.String()},
 	}
 	toolCalls := 0
-	for round := 0; round < analyzeMaxRounds; round++ {
+	for round := 0; round < a.maxRounds; round++ {
 		a.progress(jobProgress{
-			Message: fmt.Sprintf("round %d/%d", round+1, analyzeMaxRounds),
+			Message: fmt.Sprintf("round %d/%d", round+1, a.maxRounds),
 			Done:    round,
-			Total:   analyzeMaxRounds,
+			Total:   a.maxRounds,
 		})
 		msg, err := a.chatMessage(ctx, &messages, analyzeTools)
 		if err != nil {
@@ -308,7 +333,7 @@ func (a *analyzeAgent) run(ctx context.Context, files []workspaceFile) (string, 
 		if a.title != "" {
 			return a.title, nil
 		}
-		if len(msg.ToolCalls) == 0 || toolCalls >= analyzeMaxToolCalls {
+		if len(msg.ToolCalls) == 0 || toolCalls >= a.maxToolCalls {
 			break
 		}
 	}

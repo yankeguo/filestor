@@ -311,12 +311,12 @@ func TestUploadAnalyzeRoundBudgetForcesDecision(t *testing.T) {
 	calls := 0
 	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
 		calls = call
-		if call <= analyzeMaxRounds {
+		if call <= analyzeBaseRounds {
 			// The model keeps reading the same file, burning every round.
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c","type":"function","function":{"name":"read_file_as_text","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
 		}
-		require.Equal(t, analyzeMaxRounds+1, call)
+		require.Equal(t, analyzeBaseRounds+1, call)
 		require.Len(t, req.Tools, 2, "forced round drops the read tools")
 		nudged := false
 		for _, m := range req.Messages {
@@ -336,7 +336,26 @@ func TestUploadAnalyzeRoundBudgetForcesDecision(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	awaitIdle(t, app)
 	require.Equal(t, "forced", loadWorkspaceState(dir).Title)
-	require.Equal(t, analyzeMaxRounds+1, calls)
+	require.Equal(t, analyzeBaseRounds+1, calls)
+}
+
+func TestAnalyzeBudget(t *testing.T) {
+	cases := []struct {
+		files         int
+		rounds, calls int
+	}{
+		{0, analyzeBaseRounds, analyzeBaseToolCalls},
+		{1, analyzeBaseRounds, analyzeBaseToolCalls},
+		{2, analyzeBaseRounds + 1, analyzeBaseToolCalls + 2},
+		{5, analyzeBaseRounds + 4, analyzeBaseToolCalls + 8},
+		{100, analyzeRoundsCap, analyzeBaseToolCalls + 2*99},
+		{10000, analyzeRoundsCap, analyzeToolCallsCap},
+	}
+	for _, tc := range cases {
+		rounds, calls := analyzeBudget(tc.files)
+		require.Equal(t, tc.rounds, rounds, "files=%d", tc.files)
+		require.Equal(t, tc.calls, calls, "files=%d", tc.files)
+	}
 }
 
 func TestUploadAnalyzePeeks(t *testing.T) {
