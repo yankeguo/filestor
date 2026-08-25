@@ -49,7 +49,7 @@ const analyzeSystemPrompt = `You invent a short, descriptive title for a batch o
 - read_file_as_text and read_file_as_image convert office documents, PDFs, and other formats automatically; you do not need to care about the conversion.
 - The title should be a short phrase (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单".
 - If the contents contain a clear document date or datetime, call set_datetime with it (YYYY-MM-DD or YYYY-MM-DDTHH:mm). Do not guess. Call it before or in the same turn as set_title.
-- If a staged file's name is clearly messy or uninformative — camera/scanner codes like "IMG_2048.jpg" or "SCAN_0001.pdf", timestamp-only screenshot names, random hashes, placeholder names like "untitled" or "新建文档", or redundant noise like "final2", "copy of", "(1)" — and you are confident about its content (from the name, peek, or a read), call rename_file with a short, descriptive new name in the same language as the content. Keep the extension unchanged; use only letters, digits, dash, underscore, dot; rename each file at most once; never pick a name another staged file already has. When in doubt, keep the original name — renaming is optional and must not delay set_title.
+- If a staged file's name is clearly messy or uninformative — camera/scanner codes like "IMG_2048.jpg" or "SCAN_0001.pdf", timestamp-only screenshot names, random hashes, placeholder names like "untitled" or "新建文档", redundant noise like "final2", "copy of", "(1)", or a date in the name that is redundant or contradicts the document's actual date — and you are confident about its content (from the name, peek, or a read), call rename_file with a short, descriptive new name in the same language as the content. When the name carries a wrong or pointless date, use the document's actual date in the new name or drop the date entirely; never keep a date you know is wrong. Keep the extension unchanged; use only letters, digits, dash, underscore, dot; rename each file at most once; never pick a name another staged file already has. When in doubt, keep the original name — renaming is optional and must not delay set_title.
 - When you have decided, call set_title exactly once with the raw title. Decide quickly: reading every file is rarely necessary.`
 
 type chatImageURL struct {
@@ -133,7 +133,7 @@ var analyzeTools = []chatTool{
 	nameParamTool("read_file_as_image", "Load a staged file as an image (jpeg/png/gif). Oversized or other formats are converted automatically."),
 	{Type: "function", Function: chatToolFunction{
 		Name:        "rename_file",
-		Description: "Rename a staged file whose name is messy or uninformative. Only when confident about the content; keep the extension unchanged.",
+		Description: "Rename a staged file whose name is messy, uninformative, or carries a redundant or wrong date. Only when confident about the content; keep the extension unchanged.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
