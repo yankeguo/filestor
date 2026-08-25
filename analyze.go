@@ -44,13 +44,19 @@ func analyzeBudget(files int) (rounds, toolCalls int) {
 	return rounds, toolCalls
 }
 
-const analyzeSystemPrompt = `You invent a short, descriptive title for a batch of staged files that will be uploaded to object storage under a bundle directory named "YYYYMMDDhhmm-TITLE/".
+// analyzeSystemPromptRaw uses ⟪⟫ as stand-ins for backticks: a Go raw string
+// cannot contain a literal backtick, and the prompt quotes file names in
+// `backticks` so the model can tell them apart from other text.
+const analyzeSystemPromptRaw = `You invent a short, descriptive title for a batch of staged files that will be uploaded to object storage under a bundle directory named "YYYYMMDDhhmm-TITLE/".
 - The file list may include a one-line "peek" at each text file's leading content; often the names and peeks are already enough — use the read tools only when you need more.
+- The file list shows each file's size. If a file is very large (e.g. a PDF of several hundred MB), do not read or convert it — judge it by its name alone and move on; skipping a huge file must not block your decision.
 - read_file_as_text and read_file_as_image convert office documents, PDFs, and other formats automatically; you do not need to care about the conversion.
 - The title should be a short phrase (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单".
 - If the contents contain a clear document date or datetime, call set_datetime with it (YYYY-MM-DD or YYYY-MM-DDTHH:mm). Do not guess. Call it before or in the same turn as set_title.
-- If a staged file's name is clearly messy or uninformative — camera/scanner codes like "IMG_2048.jpg" or "SCAN_0001.pdf", timestamp-only screenshot names, random hashes, placeholder names like "untitled" or "新建文档", redundant noise like "final2", "copy of", "(1)", or a date in the name that is redundant or contradicts the document's actual date — and you are confident about its content (from the name, peek, or a read), call rename_file with a short, descriptive new name in the same language as the content. When the name carries a wrong or pointless date, use the document's actual date in the new name or drop the date entirely; never keep a date you know is wrong. Keep the extension unchanged; use only letters, digits, dash, underscore, dot; rename each file at most once; never pick a name another staged file already has. When in doubt, keep the original name — renaming is optional and must not delay set_title.
-- When you have decided, call set_title exactly once with the raw title. Decide quickly: reading every file is rarely necessary.`
+- If a staged file's name is clearly messy or uninformative — camera/scanner codes like ⟪IMG_2048.jpg⟫ or ⟪SCAN_0001.pdf⟫, timestamp-only screenshot names, random hashes, placeholder names like ⟪untitled⟫ or ⟪新建文档⟫, redundant noise like ⟪final2⟫, ⟪copy of⟫, ⟪(1)⟫, or a date in the name that is redundant or contradicts the document's actual date — and you are confident about its content (from the name, peek, or a read), call rename_file with a short, descriptive new name in the same language as the content. When the name carries a wrong or pointless date, use the document's actual date in the new name or drop the date entirely; never keep a date you know is wrong. Keep the extension unchanged; use only letters, digits, dash, underscore, dot; rename each file at most once; never pick a name another staged file already has. When in doubt, keep the original name — renaming is optional and must not delay set_title.
+- When you have decided, call set_title exactly once with the raw title. Decide quickly: reading every file is rarely necessary. In messages, file names are always wrapped in ⟪backticks⟫ so you can tell them apart from other text; tool arguments take the bare name without backticks.`
+
+var analyzeSystemPrompt = strings.NewReplacer("⟪", "`", "⟫", "`").Replace(analyzeSystemPromptRaw)
 
 type chatImageURL struct {
 	URL string `json:"url"`
@@ -300,7 +306,7 @@ func (a *analyzeAgent) run(ctx context.Context, files []workspaceFile) (string, 
 	var b strings.Builder
 	b.WriteString("Files staged for upload:\n")
 	for _, f := range files {
-		fmt.Fprintf(&b, "- %s (%s)\n", f.Name, f.Size)
+		fmt.Fprintf(&b, "- `%s` (%s)\n", f.Name, f.Size)
 		if peek := textPeek(a.dir, f.Name); peek != "" {
 			fmt.Fprintf(&b, "  peek: %s\n", peek)
 		}
@@ -432,7 +438,7 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 		if err != nil {
 			return reply("error: " + err.Error())
 		}
-		return chatMessage{Role: "tool", ToolCallID: tc.ID, Content: fmt.Sprintf("image loaded: %s (%s, %d bytes)", args.Name, mime, len(data))},
+		return chatMessage{Role: "tool", ToolCallID: tc.ID, Content: fmt.Sprintf("image loaded: `%s` (%s, %d bytes)", args.Name, mime, len(data))},
 			[]chatMessage{{Role: "user", Content: []chatPart{{
 				Type:     "image_url",
 				ImageURL: &chatImageURL{URL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)},
@@ -447,7 +453,7 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 		// Echo the new name so later read calls use it; the file list in the
 		// initial user message still shows the old one.
 		newName, _ := sanitizeWorkspaceName(args.NewName)
-		return reply("renamed to " + newName)
+		return reply("renamed to `" + newName + "`")
 	case "set_title":
 		title := strings.TrimSpace(args.Title)
 		if title == "" {

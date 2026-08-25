@@ -135,7 +135,7 @@ func TestUploadAnalyzeRename(t *testing.T) {
 			// The tool reply echoes the new name so later reads can use it.
 			found := false
 			for _, m := range req.Messages {
-				if s, ok := m.Content.(string); ok && m.Role == "tool" && strings.Contains(s, "renamed to 2026-03-invoice.txt") {
+				if s, ok := m.Content.(string); ok && m.Role == "tool" && strings.Contains(s, "renamed to `2026-03-invoice.txt`") {
 					found = true
 				}
 			}
