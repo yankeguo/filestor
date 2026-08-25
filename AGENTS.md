@@ -21,8 +21,8 @@ Single `package main`. No `internal/` split unless the tree clearly outgrows one
 | `push.go` | Async push of staged files to the bucket under `YYYY/MM/YYYYMMDDhhmm-TITLE/`; single-flight via the hub lock |
 | `suggest.go` | LLM title suggestion: chat-completions tool loop; `set_title` / `set_datetime` write `.upload-state.json` |
 | `convert.go` | Suggest-time file conversion (`soffice` / ImageMagick / `pdftotext` / `pandoc`) in a temp dir; never mutates staging |
-| `web/*.html` | Embedded HTML. Bootstrap 5.3 (jsdelivr CDN, SRI) with `data-bs-theme="dark"` + Bootstrap Icons; keep SRI hashes matching nanollm unless bumping the CDN URLs |
-| `web_tmpl.go` | `//go:embed web/*.html` |
+| `templates/*.html` | Embedded HTML. Bootstrap 5.3 (jsdelivr CDN, SRI) with `data-bs-theme="dark"` + Bootstrap Icons; keep SRI hashes matching nanollm unless bumping the CDN URLs |
+| `web_tmpl.go` | `//go:embed templates/*.html` |
 
 Tests live next to the code (`*_test.go`). Use `github.com/stretchr/testify`. Prefer extending an existing test file over adding a new one for the same area. HTTP tests inject `fakeStore`; never hit a real object store.
 
