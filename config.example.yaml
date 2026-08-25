@@ -15,7 +15,7 @@ s3:
   # force_path_style: false
 upload:
   workspace: upload-workspace
-# Optional OpenAI-compatible LLM endpoint used by title suggestion
+# Optional OpenAI-compatible LLM endpoint used by file analysis
 # on the upload page. url and model must be set together; effort is
 # the model's reasoning effort; headers is an optional map of HTTP headers.
 # llm:

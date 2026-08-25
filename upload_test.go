@@ -86,7 +86,7 @@ func TestUploadPageAndList(t *testing.T) {
 	require.Contains(t, body, `href="/upload"`)
 	require.Contains(t, body, "nav-link active")
 	require.Contains(t, body, `<script defer src="`+jsAsset("upload")+`">`)
-	require.NotContains(t, body, "id=\"suggest-btn\"")
+	require.NotContains(t, body, "id=\"analyze-btn\"")
 
 	req = httptest.NewRequest(http.MethodGet, "/upload/files", nil)
 	req.AddCookie(cookie)
@@ -294,6 +294,11 @@ func TestUploadStateLifecycle(t *testing.T) {
 	require.Equal(t, http.StatusOK, putUploadState(t, h, cookie, "2026-08-24T06:59", "weekly report").Code)
 	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "weekly report"}, loadWorkspaceState(dir))
 
+	// Editing time/title preserves the analyzed flag.
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "weekly report", Analyzed: true}))
+	require.Equal(t, http.StatusOK, putUploadState(t, h, cookie, "2026-08-24T06:59", "weekly report").Code)
+	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "weekly report", Analyzed: true}, loadWorkspaceState(dir))
+
 	// Invalid time is rejected and keeps the old value.
 	require.Equal(t, http.StatusBadRequest, putUploadState(t, h, cookie, "not-a-time", "x").Code)
 	require.Equal(t, "2026-08-24T06:59", loadWorkspaceState(dir).Time)
@@ -314,7 +319,7 @@ func TestUploadStateLifecycle(t *testing.T) {
 	require.Equal(t, workspaceState{}, loadWorkspaceState(dir))
 }
 
-func TestUploadPageShowsSuggestWhenLLMConfigured(t *testing.T) {
+func TestUploadPageShowsAnalyzeWhenLLMConfigured(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	cfg.LLM = LLMConfig{URL: "http://127.0.0.1:1/", Model: "m"}
 	h := NewServer(cfg, &fakeStore{}).Handler()
@@ -324,7 +329,7 @@ func TestUploadPageShowsSuggestWhenLLMConfigured(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), `id="suggest-btn"`)
+	require.Contains(t, rec.Body.String(), `id="analyze-btn"`)
 	require.Contains(t, rec.Body.String(), `<script defer src="`+jsAsset("upload")+`">`)
 }
 

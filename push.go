@@ -107,6 +107,13 @@ func (s *Server) handleUploadPush(w http.ResponseWriter, r *http.Request) {
 		workspaceBusy(w)
 		return
 	}
+	// With the LLM configured, staged files must go through one successful
+	// analyze run before they can be pushed.
+	if s.Config != nil && s.Config.LLM.URL != "" && !loadWorkspaceState(dir).Analyzed {
+		s.release(lockPush)
+		http.Error(w, "run analyze first", http.StatusBadRequest)
+		return
+	}
 	names := make([]string, 0, len(files))
 	for _, f := range files {
 		names = append(names, f.Name)

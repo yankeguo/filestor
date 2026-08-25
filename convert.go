@@ -105,9 +105,9 @@ func sniffImageMIME(head []byte) string {
 }
 
 func capConvertedText(data []byte) string {
-	truncated := len(data) > suggestTextMaxBytes
+	truncated := len(data) > analyzeTextMaxBytes
 	if truncated {
-		data = data[:suggestTextMaxBytes]
+		data = data[:analyzeTextMaxBytes]
 	}
 	out := string(data)
 	if strings.TrimSpace(out) == "" {
@@ -270,11 +270,11 @@ func convertFileToLLMImage(ctx context.Context, src string) (string, []byte, err
 			if err != nil {
 				return nil, err
 			}
-			if int64(len(data)) <= suggestImageMaxBytes && len(data) > 0 {
+			if int64(len(data)) <= analyzeImageMaxBytes && len(data) > 0 {
 				return data, nil
 			}
 		}
-		return nil, fmt.Errorf("converted image still exceeds %s", formatSize(suggestImageMaxBytes))
+		return nil, fmt.Errorf("converted image still exceeds %s", formatSize(analyzeImageMaxBytes))
 	}
 
 	if data, err := tryMagick(src); err == nil {

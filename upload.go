@@ -43,15 +43,19 @@ type uploadPageData struct {
 	Files      []workspaceFile
 	Time       string
 	Title      string
-	CanSuggest bool
+	CanAnalyze bool
+	Analyzed   bool
 }
 
 // workspaceState is the draft push options persisted as state.json inside the
 // workspace's .filestor meta directory, so it survives page reloads but stays
-// invisible to the staging list.
+// invisible to the staging list. Analyzed marks that the staged files went
+// through one successful analyze run; adding or deleting staged files clears
+// it, and push requires it while llm.url is configured.
 type workspaceState struct {
-	Time  string `json:"time"`
-	Title string `json:"title"`
+	Time     string `json:"time"`
+	Title    string `json:"title"`
+	Analyzed bool   `json:"analyzed"`
 }
 
 func (s *Server) workspaceDir() string {
@@ -225,6 +229,23 @@ func pinWorkspaceState(dir string) {
 	}
 }
 
+// markWorkspaceUnanalyzed clears the analyzed flag after the staged file set
+// changes (file added or deleted), so a push requires a fresh analyze run.
+// It is a no-op when no state file exists yet.
+func markWorkspaceUnanalyzed(dir string) {
+	if _, err := os.Stat(workspaceStatePath(dir)); errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	st := loadWorkspaceState(dir)
+	if !st.Analyzed {
+		return
+	}
+	st.Analyzed = false
+	if err := saveWorkspaceState(dir, st); err != nil {
+		log.Println("save workspace state:", err)
+	}
+}
+
 func clearWorkspaceStateIfEmpty(dir string) {
 	files, err := listWorkspaceFiles(dir)
 	if err == nil && len(files) == 0 {
@@ -247,7 +268,8 @@ func (s *Server) handleUploadPage(w http.ResponseWriter, r *http.Request) {
 		Files:      files,
 		Time:       st.Time,
 		Title:      st.Title,
-		CanSuggest: s.Config != nil && s.Config.LLM.URL != "",
+		CanAnalyze: s.Config != nil && s.Config.LLM.URL != "",
+		Analyzed:   st.Analyzed,
 	})
 }
 
@@ -312,6 +334,8 @@ func (s *Server) handleUploadAdd(w http.ResponseWriter, r *http.Request) {
 		// Pin as soon as the first file lands, even if a later part fails.
 		pinWorkspaceState(dir)
 	}
+	// New staged files invalidate the previous analyze run.
+	markWorkspaceUnanalyzed(dir)
 	s.emitFiles()
 	s.emitState()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -338,6 +362,8 @@ func (s *Server) handleUploadDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
 	}
+	// A changed staging set invalidates the previous analyze run.
+	markWorkspaceUnanalyzed(dir)
 	clearWorkspaceStateIfEmpty(dir)
 	s.emitFiles()
 	s.emitState()

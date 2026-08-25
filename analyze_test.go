@@ -30,9 +30,9 @@ func newFakeLLM(t *testing.T, fn func(call int, r *http.Request, req chatRequest
 	return srv
 }
 
-func postSuggest(t *testing.T, h http.Handler, cookie *http.Cookie) *httptest.ResponseRecorder {
+func postAnalyze(t *testing.T, h http.Handler, cookie *http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/upload/suggest", nil)
+	req := httptest.NewRequest(http.MethodPost, "/upload/analyze", nil)
 	if cookie != nil {
 		req.AddCookie(cookie)
 	}
@@ -41,30 +41,30 @@ func postSuggest(t *testing.T, h http.Handler, cookie *http.Cookie) *httptest.Re
 	return rec
 }
 
-func TestUploadSuggestRequiresLogin(t *testing.T) {
+func TestUploadAnalyzeRequiresLogin(t *testing.T) {
 	h := NewServer(cfgWithWorkspace(t), &fakeStore{}).Handler()
-	rec := postSuggest(t, h, nil)
+	rec := postAnalyze(t, h, nil)
 	require.Equal(t, http.StatusFound, rec.Code)
 	require.Equal(t, "/login", rec.Header().Get("Location"))
 }
 
-func TestUploadSuggestNotConfigured(t *testing.T) {
+func TestUploadAnalyzeNotConfigured(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("hi"), 0o644))
 	h := NewServer(cfg, &fakeStore{}).Handler()
 	cookie := loginCookie(t, h)
-	require.Equal(t, http.StatusServiceUnavailable, postSuggest(t, h, cookie).Code)
+	require.Equal(t, http.StatusServiceUnavailable, postAnalyze(t, h, cookie).Code)
 }
 
-func TestUploadSuggestNoFiles(t *testing.T) {
+func TestUploadAnalyzeNoFiles(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	cfg.LLM = LLMConfig{URL: "http://127.0.0.1:1/", Model: "m"}
 	h := NewServer(cfg, &fakeStore{}).Handler()
 	cookie := loginCookie(t, h)
-	require.Equal(t, http.StatusBadRequest, postSuggest(t, h, cookie).Code)
+	require.Equal(t, http.StatusBadRequest, postAnalyze(t, h, cookie).Code)
 }
 
-func TestUploadSuggestSuccess(t *testing.T) {
+func TestUploadAnalyzeSuccess(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello world"), 0o644))
@@ -100,15 +100,15 @@ func TestUploadSuggestSuccess(t *testing.T) {
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
-	rec := postSuggest(t, h, cookie)
+	rec := postAnalyze(t, h, cookie)
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	awaitIdle(t, app)
-	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "weekly-report"}, loadWorkspaceState(dir))
+	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "weekly-report", Analyzed: true}, loadWorkspaceState(dir))
 	require.Equal(t, "weekly-report", app.lastJob().Title)
 	require.Empty(t, app.lastJob().Error)
 }
 
-func TestUploadSuggestImageTool(t *testing.T) {
+func TestUploadAnalyzeImageTool(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	dir := cfg.Upload.Workspace
 	png := append(append([]byte{}, pngSig...), []byte("rest")...)
@@ -148,13 +148,13 @@ func TestUploadSuggestImageTool(t *testing.T) {
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
-	rec := postSuggest(t, h, cookie)
+	rec := postAnalyze(t, h, cookie)
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	awaitIdle(t, app)
 	require.Equal(t, "screenshot", loadWorkspaceState(dir).Title)
 }
 
-func TestUploadSuggestTextAnswerFallback(t *testing.T) {
+func TestUploadAnalyzeTextAnswerFallback(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
@@ -170,7 +170,7 @@ func TestUploadSuggestTextAnswerFallback(t *testing.T) {
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
-	rec := postSuggest(t, h, cookie)
+	rec := postAnalyze(t, h, cookie)
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	awaitIdle(t, app)
 	require.Equal(t, "weekly-report", app.lastJob().Title)
@@ -178,7 +178,7 @@ func TestUploadSuggestTextAnswerFallback(t *testing.T) {
 	require.Equal(t, "weekly-report", loadWorkspaceState(dir).Title)
 }
 
-func TestUploadSuggestNoTitle(t *testing.T) {
+func TestUploadAnalyzeNoTitle(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("hi"), 0o644))
 	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
@@ -189,26 +189,26 @@ func TestUploadSuggestNoTitle(t *testing.T) {
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
-	rec := postSuggest(t, h, cookie)
+	rec := postAnalyze(t, h, cookie)
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	awaitIdle(t, app)
-	require.Equal(t, "suggest failed", app.lastJob().Error)
+	require.Equal(t, "analyze failed", app.lastJob().Error)
 	require.Empty(t, loadWorkspaceState(cfg.Upload.Workspace).Title)
 }
 
-func TestUploadSuggestRoundBudgetForcesDecision(t *testing.T) {
+func TestUploadAnalyzeRoundBudgetForcesDecision(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
 	calls := 0
 	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
 		calls = call
-		if call <= suggestMaxRounds {
+		if call <= analyzeMaxRounds {
 			// The model keeps reading the same file, burning every round.
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c","type":"function","function":{"name":"read_file_as_text","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
 		}
-		require.Equal(t, suggestMaxRounds+1, call)
+		require.Equal(t, analyzeMaxRounds+1, call)
 		require.Len(t, req.Tools, 2, "forced round drops the read tools")
 		nudged := false
 		for _, m := range req.Messages {
@@ -224,14 +224,14 @@ func TestUploadSuggestRoundBudgetForcesDecision(t *testing.T) {
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
-	rec := postSuggest(t, h, cookie)
+	rec := postAnalyze(t, h, cookie)
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	awaitIdle(t, app)
 	require.Equal(t, "forced", loadWorkspaceState(dir).Title)
-	require.Equal(t, suggestMaxRounds+1, calls)
+	require.Equal(t, analyzeMaxRounds+1, calls)
 }
 
-func TestUploadSuggestPeeks(t *testing.T) {
+func TestUploadAnalyzePeeks(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "report.txt"), []byte("Q3 revenue\nsummary\nand outlook"), 0o644))
@@ -254,7 +254,7 @@ func TestUploadSuggestPeeks(t *testing.T) {
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
-	rec := postSuggest(t, h, cookie)
+	rec := postAnalyze(t, h, cookie)
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	awaitIdle(t, app)
 	require.Equal(t, "q3-report", loadWorkspaceState(dir).Title)
@@ -272,9 +272,9 @@ func TestTextPeek(t *testing.T) {
 	require.Empty(t, textPeek(dir, "missing.txt"))
 	require.Empty(t, textPeek(dir, "../secret"))
 
-	long := strings.Repeat("x", suggestPeekMaxBytes+100)
+	long := strings.Repeat("x", analyzePeekMaxBytes+100)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "long.txt"), []byte(long), 0o644))
-	require.Len(t, textPeek(dir, "long.txt"), suggestPeekMaxBytes)
+	require.Len(t, textPeek(dir, "long.txt"), analyzePeekMaxBytes)
 }
 
 func TestUnmarshalToolArgs(t *testing.T) {
@@ -296,7 +296,7 @@ func TestUnmarshalToolArgs(t *testing.T) {
 	require.Error(t, unmarshalToolArgs(json.RawMessage(`null`), &args))
 }
 
-func TestUploadSuggestObjectArguments(t *testing.T) {
+func TestUploadAnalyzeObjectArguments(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("hi"), 0o644))
 	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
@@ -307,28 +307,28 @@ func TestUploadSuggestObjectArguments(t *testing.T) {
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
-	rec := postSuggest(t, h, cookie)
+	rec := postAnalyze(t, h, cookie)
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	awaitIdle(t, app)
 	require.Equal(t, "from-object", loadWorkspaceState(cfg.Upload.Workspace).Title)
 }
 
-func TestParseSuggestTime(t *testing.T) {
-	got, err := parseSuggestTime(" 2026-08-20T15:04 ")
+func TestParseAnalyzeTime(t *testing.T) {
+	got, err := parseAnalyzeTime(" 2026-08-20T15:04 ")
 	require.NoError(t, err)
 	require.Equal(t, "2026-08-20T15:04", got)
 
-	got, err = parseSuggestTime("2026-08-20")
+	got, err = parseAnalyzeTime("2026-08-20")
 	require.NoError(t, err)
 	require.Equal(t, "2026-08-20T00:00", got)
 
-	_, err = parseSuggestTime("")
+	_, err = parseAnalyzeTime("")
 	require.Error(t, err)
-	_, err = parseSuggestTime("not-a-time")
+	_, err = parseAnalyzeTime("not-a-time")
 	require.Error(t, err)
 }
 
-func TestUploadSuggestSetDatetime(t *testing.T) {
+func TestUploadAnalyzeSetDatetime(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("invoice 2026-08-20"), 0o644))
@@ -351,15 +351,15 @@ func TestUploadSuggestSetDatetime(t *testing.T) {
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
-	rec := postSuggest(t, h, cookie)
+	rec := postAnalyze(t, h, cookie)
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	awaitIdle(t, app)
 	require.Equal(t, "invoice", app.lastJob().Title)
 	require.Equal(t, "2026-08-20T00:00", app.lastJob().Time)
-	require.Equal(t, workspaceState{Time: "2026-08-20T00:00", Title: "invoice"}, loadWorkspaceState(dir))
+	require.Equal(t, workspaceState{Time: "2026-08-20T00:00", Title: "invoice", Analyzed: true}, loadWorkspaceState(dir))
 }
 
-func TestUploadSuggestInvalidDatetimeKeepsPinnedTime(t *testing.T) {
+func TestUploadAnalyzeInvalidDatetimeKeepsPinnedTime(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
@@ -389,13 +389,32 @@ func TestUploadSuggestInvalidDatetimeKeepsPinnedTime(t *testing.T) {
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
-	rec := postSuggest(t, h, cookie)
+	rec := postAnalyze(t, h, cookie)
 	require.Equal(t, http.StatusAccepted, rec.Code)
 	awaitIdle(t, app)
-	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "ok"}, loadWorkspaceState(dir))
+	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "ok", Analyzed: true}, loadWorkspaceState(dir))
 }
 
-func TestWorkspaceLockDuringSuggest(t *testing.T) {
+func TestUploadAnalyzeFailureKeepsUnanalyzed(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59"}))
+	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+		// Neither a tool call nor usable text: genuinely no title.
+		return `{"choices":[{"message":{"role":"assistant","content":""}}]}`
+	})
+	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
+	cookie := loginCookie(t, h)
+	require.Equal(t, http.StatusAccepted, postAnalyze(t, h, cookie).Code)
+	awaitIdle(t, app)
+	require.Equal(t, "analyze failed", app.lastJob().Error)
+	require.False(t, loadWorkspaceState(dir).Analyzed)
+}
+
+func TestWorkspaceLockDuringAnalyze(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("hi"), 0o644))
 	block := make(chan struct{})
@@ -408,13 +427,13 @@ func TestWorkspaceLockDuringSuggest(t *testing.T) {
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
-	require.Equal(t, http.StatusAccepted, postSuggest(t, h, cookie).Code)
-	require.Eventually(t, func() bool { return app.lockKind() == lockSuggest }, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, http.StatusAccepted, postAnalyze(t, h, cookie).Code)
+	require.Eventually(t, func() bool { return app.lockKind() == lockAnalyze }, 2*time.Second, 10*time.Millisecond)
 
 	require.Equal(t, http.StatusConflict, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
 	require.Equal(t, http.StatusConflict, postUploadFileRec(t, h, cookie, "b.txt").Code)
 	require.Equal(t, http.StatusConflict, putUploadState(t, h, cookie, "2026-08-24T06:59", "x").Code)
-	require.Equal(t, http.StatusConflict, postSuggest(t, h, cookie).Code)
+	require.Equal(t, http.StatusConflict, postAnalyze(t, h, cookie).Code)
 
 	close(block)
 	awaitIdle(t, app)

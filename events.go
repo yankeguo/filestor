@@ -12,7 +12,7 @@ import (
 
 const (
 	lockStage   = "stage"
-	lockSuggest = "suggest"
+	lockAnalyze = "analyze"
 	lockPush    = "push"
 
 	eventSnapshot = "snapshot"
@@ -110,7 +110,7 @@ func (s *Server) lastJob() jobProgress {
 
 func (s *Server) busyForState() bool {
 	k := s.lockKind()
-	return k == lockSuggest || k == lockPush
+	return k == lockAnalyze || k == lockPush
 }
 
 func (h *eventHub) subscribe() chan sseEvent {

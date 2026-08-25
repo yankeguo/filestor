@@ -39,7 +39,7 @@ type UploadConfig struct {
 }
 
 // LLMConfig describes an optional OpenAI-compatible endpoint used by
-// POST /upload/suggest. url and model must be set together.
+// POST /upload/analyze. url and model must be set together.
 type LLMConfig struct {
 	URL     string            `yaml:"url"`
 	Model   string            `yaml:"model"`

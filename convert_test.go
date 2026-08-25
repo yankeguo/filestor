@@ -125,7 +125,7 @@ func TestConvertLargeJPEGUsesMagick(t *testing.T) {
 func TestReadWorkspaceImageConvertsOversizedJPEG(t *testing.T) {
 	dir := t.TempDir()
 	// Bigger than 8 MiB so the native jpeg path is skipped.
-	huge := make([]byte, suggestImageMaxBytes+1)
+	huge := make([]byte, analyzeImageMaxBytes+1)
 	huge[0], huge[1], huge[2] = 0xff, 0xd8, 0xff
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "big.jpg"), huge, 0o644))
 

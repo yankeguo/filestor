@@ -44,7 +44,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadAdd)))
 	mux.Handle("DELETE /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadDelete)))
 	mux.Handle("PUT /upload/state", s.requireAuth(http.HandlerFunc(s.handleUploadState)))
-	mux.Handle("POST /upload/suggest", s.requireAuth(http.HandlerFunc(s.handleUploadSuggest)))
+	mux.Handle("POST /upload/analyze", s.requireAuth(http.HandlerFunc(s.handleUploadAnalyze)))
 	mux.Handle("POST /upload/push", s.requireAuth(http.HandlerFunc(s.handleUploadPush)))
 	mux.Handle("GET /upload/events", s.requireAuth(http.HandlerFunc(s.handleUploadEvents)))
 	return withSecurityHeaders(mux)

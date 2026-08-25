@@ -248,3 +248,60 @@ func TestUploadPushFailureKeepsFiles(t *testing.T) {
 	awaitIdle(t, srv)
 	require.Empty(t, srv.lastJob().Error)
 }
+
+func TestUploadPushRequiresAnalyze(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	// The gate only exists while the LLM is configured; the URL is never
+	// called here, only its presence matters.
+	cfg.LLM = LLMConfig{URL: "http://127.0.0.1:1/", Model: "m"}
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644))
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "t"}))
+	srv := NewServer(cfg, &fakeStore{})
+	h := srv.Handler()
+	cookie := loginCookie(t, h)
+
+	// Not analyzed yet: push is rejected while the LLM is configured.
+	require.Equal(t, http.StatusBadRequest, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+
+	// A successful analyze run (flagged in the state) unlocks the push.
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "t", Analyzed: true}))
+	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+	awaitIdle(t, srv)
+	require.Empty(t, srv.lastJob().Error)
+}
+
+func TestUploadAddClearsAnalyzed(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	cfg.LLM = LLMConfig{URL: "http://127.0.0.1:1/", Model: "m"}
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644))
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "t", Analyzed: true}))
+	h := NewServer(cfg, &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
+
+	require.Equal(t, http.StatusOK, postUploadFileRec(t, h, cookie, "b.txt").Code)
+	// Only the analyzed flag is reset; the pinned time/title survive.
+	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "t"}, loadWorkspaceState(dir))
+	require.Equal(t, http.StatusBadRequest, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+}
+
+func TestUploadDeleteClearsAnalyzed(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	cfg.LLM = LLMConfig{URL: "http://127.0.0.1:1/", Model: "m"}
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b"), 0o644))
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "t", Analyzed: true}))
+	h := NewServer(cfg, &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
+
+	req := httptest.NewRequest(http.MethodDelete, "/upload/files?name=a.txt", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	// The workspace is not empty, so the state file stays with the flag reset.
+	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "t"}, loadWorkspaceState(dir))
+	require.Equal(t, http.StatusBadRequest, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+}

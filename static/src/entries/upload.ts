@@ -1,5 +1,5 @@
 // Upload page: staging file list, sequential XHR staging with byte progress,
-// draft state persistence, SSE-driven job progress, suggest and push actions.
+// draft state persistence, SSE-driven job progress, analyze and push actions.
 
 interface WorkspaceFile {
   name: string
@@ -10,6 +10,7 @@ interface WorkspaceFile {
 interface WorkspaceState {
   time?: string
   title?: string
+  analyzed?: boolean
 }
 
 interface JobProgress {
@@ -44,7 +45,8 @@ const pickerLabel = el<HTMLLabelElement>('picker-label')
 const statusEl = el<HTMLElement>('status')
 const pushTime = el<HTMLInputElement>('push-time')
 const pushTitle = el<HTMLInputElement>('push-title')
-const suggestBtn = document.getElementById('suggest-btn') as HTMLButtonElement | null
+const analyzeBtn = document.getElementById('analyze-btn') as HTMLButtonElement | null
+const analyzeHint = el<HTMLElement>('analyze-hint')
 const pushBtn = el<HTMLButtonElement>('push-btn')
 const jobBox = el<HTMLElement>('job-box')
 const jobBar = el<HTMLElement>('job-bar')
@@ -52,6 +54,7 @@ const jobStatus = el<HTMLElement>('job-status')
 
 let staging = false
 let lock = ''
+let analyzed = false
 const stageMax = 2 * 1024 * 1024 * 1024
 let saveTimer: number | undefined
 
@@ -129,11 +132,15 @@ function goLoginIfNeeded(res: Response): boolean {
 
 function applyLock(): void {
   const busy = isBusy()
-  const jobBusy = lock === 'suggest' || lock === 'push'
+  const jobBusy = lock === 'analyze' || lock === 'push'
+  const analyzeRequired = analyzeBtn !== null
   picker.disabled = busy
   pickerLabel.classList.toggle('disabled', busy)
-  if (suggestBtn) suggestBtn.disabled = busy
-  pushBtn.disabled = busy
+  if (analyzeBtn) analyzeBtn.disabled = busy
+  // With the LLM configured, push stays disabled until the staged files went
+  // through one successful analyze run (adding/deleting files resets it).
+  pushBtn.disabled = busy || (analyzeRequired && !analyzed)
+  analyzeHint.classList.toggle('d-none', !analyzeRequired || analyzed)
   pushTime.disabled = jobBusy
   pushTitle.disabled = jobBusy
   drop.classList.toggle('pe-none', busy)
@@ -146,6 +153,8 @@ function applyState(st: WorkspaceState | null): void {
   if (!st) return
   if (st.time && document.activeElement !== pushTime) pushTime.value = st.time
   if (document.activeElement !== pushTitle) pushTitle.value = st.title || ''
+  if (typeof st.analyzed === 'boolean') analyzed = st.analyzed
+  applyLock()
 }
 
 function showJob(): void {
@@ -171,12 +180,12 @@ function renderJob(job: JobProgress | null): void {
     return
   }
   if (job.error) {
-    const fail = job.kind === 'suggest' ? 'Suggest failed' : 'Upload failed: ' + job.error
+    const fail = job.kind === 'analyze' ? 'Analyze failed' : 'Upload failed: ' + job.error
     setBar(parseInt(jobBar.style.width, 10) || 0, false, fail, 'text-danger')
     return
   }
-  if (job.kind === 'suggest') {
-    let msg = job.message || 'Suggesting a title…'
+  if (job.kind === 'analyze') {
+    let msg = job.message || 'Analyzing…'
     if (job.file) msg += ' (' + job.file + ')'
     const spct = job.total ? Math.floor(((job.done || 0) * 100) / job.total) : 0
     setBar(spct, true, msg)
@@ -194,10 +203,10 @@ function renderJob(job: JobProgress | null): void {
 
 function renderDone(job: JobProgress | null): void {
   if (!job) return
-  if (job.kind === 'suggest') {
+  if (job.kind === 'analyze') {
     if (job.title) pushTitle.value = job.title
     if (job.time) pushTime.value = job.time
-    setBar(100, false, 'Title set.', 'text-success')
+    setBar(100, false, 'Analysis complete.', 'text-success')
     return
   }
   if (job.kind === 'push') {
@@ -455,22 +464,22 @@ function deleteFile(name: string | null): void {
     })
 }
 
-if (suggestBtn) {
-  suggestBtn.addEventListener('click', () => {
-    if (suggestBtn.disabled || isBusy()) return
+if (analyzeBtn) {
+  analyzeBtn.addEventListener('click', () => {
+    if (analyzeBtn.disabled || isBusy()) return
     showError('')
-    fetch('/upload/suggest', { method: 'POST', credentials: 'same-origin' })
+    fetch('/upload/analyze', { method: 'POST', credentials: 'same-origin' })
       .then((res) => {
         if (goLoginIfNeeded(res)) return
         if (res.status === 409) throw new Error('Another operation is in progress, try again in a moment.')
         if (!res.ok) {
           return res.text().then((t) => {
-            throw new Error((t || 'suggest failed').trim())
+            throw new Error((t || 'analyze failed').trim())
           })
         }
       })
       .catch((err: Error) => {
-        showError(err.message || 'Could not suggest a title.')
+        showError(err.message || 'Could not analyze the staged files.')
       })
   })
 }
