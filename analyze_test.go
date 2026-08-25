@@ -154,6 +154,55 @@ func TestUploadAnalyzeImageTool(t *testing.T) {
 	require.Equal(t, "screenshot", loadWorkspaceState(dir).Title)
 }
 
+func TestUploadAnalyzeMultiImageRepliesStayConsecutive(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	png := append(append([]byte{}, pngSig...), []byte("rest")...)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.png"), png, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.png"), png, 0o644))
+
+	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+		switch call {
+		case 1:
+			// Two image reads in a single assistant turn.
+			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+				`{"id":"c1","type":"function","function":{"name":"read_file_as_image","arguments":"{\"name\":\"a.png\"}"}},` +
+				`{"id":"c2","type":"function","function":{"name":"read_file_as_image","arguments":"{\"name\":\"b.png\"}"}}]}}]}`
+		case 2:
+			// The assistant turn must be followed by consecutive tool replies;
+			// the user messages carrying the images come after them, or strict
+			// providers reject the request ("insufficient tool messages").
+			idx := -1
+			for i, m := range req.Messages {
+				if m.Role == "assistant" && len(m.ToolCalls) == 2 {
+					idx = i
+				}
+			}
+			require.GreaterOrEqual(t, idx, 0)
+			require.GreaterOrEqual(t, len(req.Messages), idx+5)
+			ms := req.Messages[idx+1 : idx+5]
+			require.Equal(t, "tool", ms[0].Role)
+			require.Equal(t, "c1", ms[0].ToolCallID)
+			require.Equal(t, "tool", ms[1].Role)
+			require.Equal(t, "c2", ms[1].ToolCallID)
+			require.Equal(t, "user", ms[2].Role)
+			require.Equal(t, "user", ms[3].Role)
+			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+				`{"id":"c3","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"photos\"}"}}]}}]}`
+		default:
+			t.Fatalf("unexpected extra LLM call %d", call)
+			return ""
+		}
+	})
+	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
+	cookie := loginCookie(t, h)
+	require.Equal(t, http.StatusAccepted, postAnalyze(t, h, cookie).Code)
+	awaitIdle(t, app)
+	require.Equal(t, "photos", loadWorkspaceState(dir).Title)
+}
+
 func TestUploadAnalyzeTextAnswerFallback(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	dir := cfg.Upload.Workspace

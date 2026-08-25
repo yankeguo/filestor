@@ -278,10 +278,16 @@ func (a *analyzeAgent) run(ctx context.Context, files []workspaceFile) (string, 
 		if err != nil {
 			return "", err
 		}
+		// Replies first, image-carrying user messages after them: the tool
+		// replies must stay consecutive right behind the assistant message.
+		var extra []chatMessage
 		for _, tc := range msg.ToolCalls {
 			toolCalls++
-			messages = append(messages, a.runTool(ctx, tc)...)
+			reply, userMsgs := a.runTool(ctx, tc)
+			messages = append(messages, reply)
+			extra = append(extra, userMsgs...)
 		}
+		messages = append(messages, extra...)
 		if a.title != "" {
 			return a.title, nil
 		}
@@ -307,9 +313,13 @@ func (a *analyzeAgent) finalize(ctx context.Context, messages []chatMessage) (st
 	if err != nil {
 		return "", err
 	}
+	var extra []chatMessage
 	for _, tc := range msg.ToolCalls {
-		messages = append(messages, a.runTool(ctx, tc)...)
+		reply, userMsgs := a.runTool(ctx, tc)
+		messages = append(messages, reply)
+		extra = append(extra, userMsgs...)
 	}
+	messages = append(messages, extra...)
 	if a.title != "" {
 		return a.title, nil
 	}
@@ -345,12 +355,15 @@ func (a *analyzeAgent) chatMessage(ctx context.Context, messages *[]chatMessage,
 	return msg, nil
 }
 
-// runTool executes one tool call and returns the message(s) to append: always
-// a tool reply, plus an extra user message carrying the image for
-// read_file_as_image.
-func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) []chatMessage {
-	reply := func(text string) []chatMessage {
-		return []chatMessage{{Role: "tool", ToolCallID: tc.ID, Content: text}}
+// runTool executes one tool call and returns the tool reply plus any extra
+// user messages (the image payload for read_file_as_image). Callers must
+// append all replies of one assistant turn before the extras: strict
+// OpenAI-compatible APIs reject an assistant message whose tool_calls are not
+// immediately followed by consecutive tool replies, so interleaving user
+// image messages between them breaks the request.
+func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessage, []chatMessage) {
+	reply := func(text string) (chatMessage, []chatMessage) {
+		return chatMessage{Role: "tool", ToolCallID: tc.ID, Content: text}, nil
 	}
 	var args struct {
 		Name  string `json:"name"`
@@ -376,13 +389,11 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) []chatMessa
 		if err != nil {
 			return reply("error: " + err.Error())
 		}
-		return []chatMessage{
-			{Role: "tool", ToolCallID: tc.ID, Content: fmt.Sprintf("image loaded: %s (%s, %d bytes)", args.Name, mime, len(data))},
-			{Role: "user", Content: []chatPart{{
+		return chatMessage{Role: "tool", ToolCallID: tc.ID, Content: fmt.Sprintf("image loaded: %s (%s, %d bytes)", args.Name, mime, len(data))},
+			[]chatMessage{{Role: "user", Content: []chatPart{{
 				Type:     "image_url",
 				ImageURL: &chatImageURL{URL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)},
-			}}},
-		}
+			}}}}
 	case "set_title":
 		title := strings.TrimSpace(args.Title)
 		if title == "" {
