@@ -66,7 +66,8 @@ func sanitizePushTitle(s string) (string, error) {
 	return out, nil
 }
 
-// pushPrefix builds YYYY/MM/YYYYMMDDhhmm-TITLE from the picked wall-clock time.
+// pushPrefix builds the bundle prefix YYYY/MM/YYYYMMDDhhmm-TITLE from the
+// picked wall-clock time.
 func pushPrefix(t time.Time, title string) string {
 	return t.Format("2006/01/200601021504") + "-" + title
 }

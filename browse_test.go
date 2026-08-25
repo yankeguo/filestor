@@ -132,7 +132,7 @@ func TestBrowseCalendarHighlightsAndListsDay(t *testing.T) {
 	require.Equal(t, "2026/08/", store.lastList[0])
 	body := rec.Body.String()
 	require.Contains(t, body, "August 2026")
-	// Days with records link back to the day view.
+	// Days with bundles link back to the day view.
 	require.Contains(t, body, `/browse?month=2026-08&day=2026-08-24`)
 	require.Contains(t, body, `day=2026-08-10`)
 	// Non-conforming directories are not counted.
@@ -210,13 +210,13 @@ func TestBuildBrowseCalendarGrid(t *testing.T) {
 	// The 31st lands in the first column of the last week.
 	last := d.Weeks[len(d.Weeks)-1]
 	require.Equal(t, 31, last[0].Day)
-	// The selected day is flagged, highlighted with its record, and listed.
+	// The selected day is flagged, highlighted with its bundle, and listed.
 	// (2026-08-24 is the Monday of the fifth row.)
 	sel := d.Weeks[4][0]
 	require.Equal(t, 24, sel.Day)
 	require.True(t, sel.Selected)
 	require.True(t, sel.Today)
-	require.Equal(t, 1, sel.Records)
+	require.Equal(t, 1, sel.Bundles)
 	require.Equal(t, []calDir{{Time: "06:59", Title: "x", Prefix: "2026/08/202608240659-x/"}}, d.DayDirs)
 }
 
@@ -254,7 +254,7 @@ func TestBrowseNextPage(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "marker=a.txt")
 }
 
-func TestBrowseRecordView(t *testing.T) {
+func TestBrowseBundleView(t *testing.T) {
 	store := &fakeStore{page: ListPage{Objects: []ObjectInfo{
 		{Key: "2026/08/202608240659-weekly-report/photo.jpg", Size: 1024},
 		{Key: "2026/08/202608240659-weekly-report/clip.mp4", Size: 2048},
@@ -290,7 +290,7 @@ func TestBrowseRecordView(t *testing.T) {
 	require.NotContains(t, body, "breadcrumb")
 }
 
-func TestBrowseRecordViewSkipsOversizedImagePreview(t *testing.T) {
+func TestBrowseBundleViewSkipsOversizedImagePreview(t *testing.T) {
 	store := &fakeStore{page: ListPage{Objects: []ObjectInfo{
 		{Key: "2026/08/202608240659-x/big.jpg", Size: imagePreviewMaxSize + 1},
 	}}}
@@ -307,8 +307,8 @@ func TestBrowseRecordViewSkipsOversizedImagePreview(t *testing.T) {
 	require.Contains(t, body, "bi-file-earmark-image")
 }
 
-func TestParseRecordPrefix(t *testing.T) {
-	date, hm, title, ok := parseRecordPrefix("2026/08/202608240659-weekly-report/")
+func TestParseBundlePrefix(t *testing.T) {
+	date, hm, title, ok := parseBundlePrefix("2026/08/202608240659-weekly-report/")
 	require.True(t, ok)
 	require.Equal(t, "2026-08-24", date)
 	require.Equal(t, "06:59", hm)
@@ -322,7 +322,7 @@ func TestParseRecordPrefix(t *testing.T) {
 		"2026/08/202608240659-x/extra/",
 		"2x26/08/202608240659-x/",
 	} {
-		_, _, _, ok := parseRecordPrefix(p)
+		_, _, _, ok := parseBundlePrefix(p)
 		require.False(t, ok, p)
 	}
 }

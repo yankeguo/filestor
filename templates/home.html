@@ -9,7 +9,7 @@
 <body>
   {{template "nav" .}}
   <main class="container py-4">
-    {{if .Record}}
+    {{if .Bundle}}
     <p class="mb-3">
       <a href="/browse?month={{.BackMonth}}&day={{.Date}}" class="text-decoration-none">
         <i class="bi bi-arrow-left"></i> {{.Date}}
@@ -218,10 +218,10 @@
                 {{range .}}
                 <td{{if .Selected}} class="table-primary"{{end}}>
                   {{if .Day}}
-                    {{if gt .Records 0}}
+                    {{if gt .Bundles 0}}
                     <a href="/browse?month={{$.Month}}&day={{.Date}}"
                       class="d-block text-decoration-none fw-semibold{{if .Today}} text-warning{{end}}"
-                      title="{{.Records}} record(s)">{{.Day}}</a>
+                      title="{{.Bundles}} bundle(s)">{{.Day}}</a>
                     {{else}}
                     <span class="d-block text-secondary{{if .Today}} fw-bold{{end}}">{{.Day}}</span>
                     {{end}}
@@ -256,10 +256,10 @@
               {{end}}
             </div>
             {{else}}
-            <div class="card-body text-secondary">No records on this day.</div>
+            <div class="card-body text-secondary">No bundles on this day.</div>
             {{end}}
           {{else}}
-          <div class="card-body text-secondary">Days with records are highlighted on the calendar.</div>
+          <div class="card-body text-secondary">Days with bundles are highlighted on the calendar.</div>
           {{end}}
         </div>
       </div>

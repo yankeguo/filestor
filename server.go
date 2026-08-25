@@ -131,13 +131,13 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		}
 		data := buildBrowseData(prefix, page)
 		data.Contents = true
-		// Record directories get the dedicated record view instead of the
+		// Bundle directories get the dedicated bundle view instead of the
 		// generic contents table.
-		decorateRecord(&data, s.store)
+		decorateBundle(&data, s.store)
 		s.render(w, "home.html", data)
 		return
 	}
-	// Calendar view over the fixed YYYY/MM/YYYYMMDDhhmm-TITLE/ layout.
+	// Calendar view over the fixed bundle layout (YYYY/MM/YYYYMMDDhhmm-TITLE/).
 	now := time.Now()
 	var day time.Time
 	if d := q.Get("day"); d != "" {

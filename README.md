@@ -7,10 +7,10 @@ Cookie-authenticated browser for one S3-compatible bucket (Aliyun OSS, Qcloud CO
 - Standard `net/http` server
 - YAML config: `admin.{username,password}`, `s3.{endpoint,region,bucket,access_key_id,secret_access_key}` (+ optional `s3.force_path_style`), optional `upload.workspace` and `llm.{url,model,effort,headers}`
 - Cookie login (HMAC, HttpOnly, SameSite=Lax)
-- Calendar browse at `/browse`: monthly grid (weeks start Monday) with days holding records highlighted; pick a day to list its record directories, click through to a dedicated record view (title/date header, file stats, image gallery and video/audio players via inline presigned URLs)
+- Calendar browse at `/browse`: monthly grid (weeks start Monday) with days holding bundles highlighted; pick a day to list its bundles, click through to a dedicated bundle view (title/date header, file stats, image gallery and video/audio players via inline presigned URLs)
 - `GET /download` 302s to a 5-minute presigned GET URL (`Content-Disposition: attachment`); `GET /preview` signs without it for inline rendering
 - Local upload workspace at `/upload` (list, drag-and-drop add with per-file progress, delete). Files stay on disk until pushed. Staging, title suggestion, and bucket push share a workspace lock and live progress over `GET /upload/events`.
-- One-click push of staged files to the bucket under `YYYY/MM/YYYYMMDDhhmm-TITLE/` (async job, one at a time, live progress on the page).
+- One-click push of staged files to the bucket as a bundle under `YYYY/MM/YYYYMMDDhhmm-TITLE/` (async job, one at a time, live progress on the page).
 - One-click LLM title suggestion for staged files (async OpenAI-compatible tool loop: `read_file_as_text`, `read_file_as_image`, `set_datetime`, `set_title`). The initial prompt peeks at each text file's first 1 KiB so most batches need no read calls; if the read budget runs out, the model is forced to decide with read tools closed instead of failing. Office/PDF and odd or oversized images are converted at suggest-time inside the container.
 - SIGINT/SIGTERM stops accepting connections and waits for in-flight requests; a second signal terminates
 
@@ -19,7 +19,7 @@ Cookie-authenticated browser for one S3-compatible bucket (Aliyun OSS, Qcloud CO
 ```bash
 cp config.example.yaml config.yaml
 # edit admin credentials and s3.*
-(cd static && bun install && bun run build)  # build the embedded frontend bundles
+(cd static && bun install && bun run build)  # build the embedded frontend assets
 go run . -config config.yaml -listen :8080
 ```
 
@@ -88,12 +88,12 @@ All of `admin.username`, `admin.password`, and `s3.{endpoint,region,bucket,acces
 | `GET` | `/` | no | 302 to `/browse` |
 | `GET`/`POST` | `/login` | no | Sign-in; already logged in → `/browse` |
 | `POST` | `/logout` | cookie | Clear session, 302 to `/login` |
-| `GET` | `/browse` | cookie | Calendar of the current month over `YYYY/MM/…`; days with records highlighted, today selected |
-| `GET` | `/browse?month=YYYY-MM&day=YYYY-MM-DD` | cookie | Calendar for that month plus the day's record directories |
-| `GET` | `/browse?prefix=&marker=` | cookie | Record view for a `YYYY/MM/YYYYMMDDhhmm-TITLE/` dir (header, stats, media preview, file list); generic contents view otherwise (`Delimiter=/`, 200 keys per page) |
+| `GET` | `/browse` | cookie | Calendar of the current month over `YYYY/MM/…`; days with bundles highlighted, today selected |
+| `GET` | `/browse?month=YYYY-MM&day=YYYY-MM-DD` | cookie | Calendar for that month plus the day's bundles |
+| `GET` | `/browse?prefix=&marker=` | cookie | Bundle view for a `YYYY/MM/YYYYMMDDhhmm-TITLE/` dir (header, stats, media preview, file list); generic contents view otherwise (`Delimiter=/`, 200 keys per page) |
 | `GET` | `/download?key=` | cookie | Sign a 5-minute GET URL (`Content-Disposition: attachment`) and 302 to the bucket |
 | `GET` | `/preview?key=` | cookie | Sign a 5-minute GET URL without attachment disposition (inline render) and 302 to the bucket |
-| `GET` | `/static/` | cookie | Embedded frontend bundles (content-hashed names, immutable cache) |
+| `GET` | `/static/` | cookie | Embedded frontend assets (content-hashed names, immutable cache) |
 | `GET` | `/upload` | cookie | Local workspace page (EventSource `/upload/events`) |
 | `GET` | `/upload/events` | cookie | SSE: `snapshot`, `lock`, `files`, `state`, `progress`, `done`, `error`; lagging subscribers are dropped so EventSource reconnects to a fresh snapshot |
 | `GET` | `/upload/files` | cookie | JSON list of regular files in the workspace |
@@ -103,7 +103,7 @@ All of `admin.username`, `admin.password`, and `s3.{endpoint,region,bucket,acces
 | `POST` | `/upload/suggest` | cookie | Start async LLM title suggestion (202; 409 if locked); result over SSE |
 | `POST` | `/upload/push` | cookie | Form `time` (`YYYY-MM-DDTHH:mm`) + `title`; starts the async bucket push (409 if locked) |
 
-The calendar assumes the fixed layout pushed by `/upload` (`YYYY/MM/YYYYMMDDhhmm-TITLE/`): directories are counted per day from the first 8 digits of their name and shown as `hh:mm` + title; non-conforming names are ignored by the calendar but still reachable from the contents view. Opening a record directory shows a dedicated record view instead of the generic contents table: a header with the parsed title and date/time plus a back link to the day, file count and total size, type-aware icons, and inline previews for browser-native media (image gallery, `<video>`/`<audio>` players over `/preview` presigned URLs; images above 32 MiB stay download-only). Other prefixes keep the generic contents view: folder rows are common prefixes; files skip the placeholder object whose key equals the current prefix. `/upload` only manages a local staging directory (flat files only: no folders, no hidden files starting with `.`; names are basenames). Pushing uploads every staged file to `YYYY/MM/YYYYMMDDhhmm-TITLE/<name>` in the bucket — the picked time is used as-is regardless of timezone, and the title is sanitized to `[-_.A-Za-z0-9]` plus CJK letters with other chars folded to `-`. Each file is removed from staging once it lands; on failure the job stops and the remaining files stay staged. The first staged file pins the push datetime (and any edited time/title) in `.filestor/state.json` inside the workspace, so a page reload keeps them; the state is cleared when the staging area empties (all deleted, or a successful push with nothing left). All non-staged files live under the workspace's hidden `.filestor/` directory: `state.json`, a `tmp/` area for atomic writes, and a `cache/` of read-time conversions keyed by the source file's SHA-256 (re-reading an already-converted file skips the external converters; entries expire after 7 days and stale temp files are cleaned on startup). The Suggest button is shown only when `llm.url` is configured. There is no search.
+A **bundle** is one pushed batch of files: a directory named `YYYYMMDDhhmm-TITLE` under the fixed `YYYY/MM/` layout. The calendar assumes this layout (pushed by `/upload`): bundles are counted per day from the first 8 digits of their name and shown as `hh:mm` + title; non-conforming names are ignored by the calendar but still reachable from the contents view. Opening a bundle shows a dedicated bundle view instead of the generic contents table: a header with the parsed title and date/time plus a back link to the day, file count and total size, type-aware icons, and inline previews for browser-native media (image gallery, `<video>`/`<audio>` players over `/preview` presigned URLs; images above 32 MiB stay download-only). Other prefixes keep the generic contents view: folder rows are common prefixes; files skip the placeholder object whose key equals the current prefix. `/upload` only manages a local staging directory (flat files only: no folders, no hidden files starting with `.`; names are basenames). Pushing uploads every staged file to `YYYY/MM/YYYYMMDDhhmm-TITLE/<name>` in the bucket — the picked time is used as-is regardless of timezone, and the title is sanitized to `[-_.A-Za-z0-9]` plus CJK letters with other chars folded to `-`. Each file is removed from staging once it lands; on failure the job stops and the remaining files stay staged. The first staged file pins the push datetime (and any edited time/title) in `.filestor/state.json` inside the workspace, so a page reload keeps them; the state is cleared when the staging area empties (all deleted, or a successful push with nothing left). All non-staged files live under the workspace's hidden `.filestor/` directory: `state.json`, a `tmp/` area for atomic writes, and a `cache/` of read-time conversions keyed by the source file's SHA-256 (re-reading an already-converted file skips the external converters; entries expire after 7 days and stale temp files are cleaned on startup). The Suggest button is shown only when `llm.url` is configured. There is no search.
 
 ## Docker / GHCR
 

@@ -26,7 +26,7 @@ const (
 	suggestHTTPTimeout   = 120 * time.Second
 )
 
-const suggestSystemPrompt = `You invent a short, descriptive title for a batch of staged files that will be uploaded to object storage under "YYYYMMDDhhmm-TITLE/".
+const suggestSystemPrompt = `You invent a short, descriptive title for a batch of staged files that will be uploaded to object storage under a bundle directory named "YYYYMMDDhhmm-TITLE/".
 - The file list may include a one-line "peek" at each text file's leading content; often the names and peeks are already enough — use the read tools only when you need more.
 - read_file_as_text and read_file_as_image convert office documents, PDFs, and other formats automatically; you do not need to care about the conversion.
 - The title should be a short phrase (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单".
@@ -125,7 +125,7 @@ var suggestTools = []chatTool{
 	}},
 	{Type: "function", Function: chatToolFunction{
 		Name:        "set_datetime",
-		Description: "Set the staging record time from a clear date or datetime found in the files. Do not guess.",
+		Description: "Set the bundle time from a clear date or datetime found in the files. Do not guess.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

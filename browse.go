@@ -23,7 +23,7 @@ type fileEntry struct {
 	Size         string
 	LastModified string
 	SizeBytes    int64
-	// Record view extras: type icon, inline-preview kind ("image"/"video"/
+	// Bundle view extras: type icon, inline-preview kind ("image"/"video"/
 	// "audio") and the signed preview URL (empty when preview is unavailable).
 	Icon       string
 	Kind       string
@@ -43,8 +43,8 @@ type browseData struct {
 	NextMarker string
 	Prefix     string
 
-	// Record mode (dedicated view for a YYYY/MM/YYYYMMDDhhmm-TITLE/ dir).
-	Record    bool
+	// Bundle mode (dedicated view for a bundle directory).
+	Bundle    bool
 	Title     string
 	Date      string // YYYY-MM-DD
 	TimeHM    string // hh:mm
@@ -68,12 +68,12 @@ type browseData struct {
 type calDay struct {
 	Day      int
 	Date     string
-	Records  int
+	Bundles  int
 	Today    bool
 	Selected bool
 }
 
-// calDir is one record directory listed for the selected day.
+// calDir is one bundle listed for the selected day.
 type calDir struct {
 	Time   string
 	Title  string
@@ -177,9 +177,12 @@ func buildBrowseData(prefix string, page ListPage) browseData {
 	return data
 }
 
-// parseRecordPrefix matches the fixed YYYY/MM/YYYYMMDDhhmm-TITLE/ layout and
-// returns the record's display date (YYYY-MM-DD), time (hh:mm) and title.
-func parseRecordPrefix(prefix string) (date, hm, title string, ok bool) {
+// A bundle is a directory named YYYYMMDDhhmm-TITLE under the fixed YYYY/MM/
+// layout: one pushed batch of files at a picked wall-clock time.
+//
+// parseBundlePrefix matches the fixed bundle layout YYYY/MM/YYYYMMDDhhmm-TITLE/
+// and returns the bundle's display date (YYYY-MM-DD), time (hh:mm) and title.
+func parseBundlePrefix(prefix string) (date, hm, title string, ok bool) {
 	parts := strings.Split(strings.Trim(prefix, "/"), "/")
 	if len(parts) != 3 || len(parts[0]) != 4 || !isDigits(parts[0]) ||
 		len(parts[1]) != 2 || !isDigits(parts[1]) {
@@ -247,16 +250,16 @@ func previewKind(name string) string {
 // download-only row so the page stays light.
 const imagePreviewMaxSize = 32 << 20
 
-// decorateRecord upgrades a contents listing of a record directory into the
-// dedicated record view: parsed header, file stats, type icons and signed
+// decorateBundle upgrades a contents listing of a bundle directory into the
+// dedicated bundle view: parsed header, file stats, type icons and signed
 // inline-preview URLs for browser-native media. It is a no-op for prefixes
-// outside the fixed YYYY/MM/YYYYMMDDhhmm-TITLE/ layout.
-func decorateRecord(data *browseData, store ObjectStore) {
-	date, hm, title, ok := parseRecordPrefix(data.Prefix)
+// outside the fixed bundle layout.
+func decorateBundle(data *browseData, store ObjectStore) {
+	date, hm, title, ok := parseBundlePrefix(data.Prefix)
 	if !ok {
 		return
 	}
-	data.Record = true
+	data.Bundle = true
 	data.Date = date
 	data.TimeHM = hm
 	data.Title = title
@@ -294,12 +297,12 @@ const (
 	browseMonthLayout = "2006-01"
 	browseDayLayout   = "2006-01-02"
 	// monthListMaxPages bounds the pagination followed to collect one month's
-	// record directories (at 200 keys per page, 10 pages is 2000 directories).
+	// bundle directories (at 200 keys per page, 10 pages is 2000 directories).
 	monthListMaxPages = 10
 )
 
 // listAllDirs returns every common prefix under prefix, following pagination
-// so the calendar sees the whole month even when it holds many records.
+// so the calendar sees the whole month even when it holds many bundles.
 func listAllDirs(store ObjectStore, prefix string) ([]string, error) {
 	var dirs []string
 	marker := ""
@@ -335,8 +338,9 @@ func splitDayDir(name string) (hm, title string) {
 	return "", name
 }
 
-// buildBrowseCalendar renders one month of the fixed YYYY/MM/YYYYMMDDhhmm-TITLE/
-// layout: dirs are the common prefixes under the month's "YYYY/MM/" prefix.
+// buildBrowseCalendar renders one month of the fixed bundle layout
+// (YYYY/MM/YYYYMMDDhhmm-TITLE/): dirs are the common prefixes under the
+// month's "YYYY/MM/" prefix.
 // A zero selected time shows the month without a day list.
 func buildBrowseCalendar(month time.Time, selected time.Time, dirs []string, now time.Time) browseData {
 	monthPrefix := month.Format("2006/01/")
@@ -387,7 +391,7 @@ func buildBrowseCalendar(month time.Time, selected time.Time, dirs []string, now
 		week[(offset+d-1)%7] = calDay{
 			Day:      d,
 			Date:     date.Format(browseDayLayout),
-			Records:  counts[key],
+			Bundles:  counts[key],
 			Today:    key == todayKey,
 			Selected: key == selectedKey,
 		}
