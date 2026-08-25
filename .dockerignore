@@ -6,3 +6,5 @@
 config.yaml
 upload-workspace
 LICENSE
+static/node_modules
+static/dist

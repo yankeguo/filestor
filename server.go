@@ -38,6 +38,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /browse", s.requireAuth(http.HandlerFunc(s.handleBrowse)))
 	mux.Handle("GET /download", s.requireAuth(http.HandlerFunc(s.handleDownload)))
 	mux.Handle("GET /preview", s.requireAuth(http.HandlerFunc(s.handlePreview)))
+	mux.Handle("GET /static/", s.requireAuth(staticHandler()))
 	mux.Handle("GET /upload", s.requireAuth(http.HandlerFunc(s.handleUploadPage)))
 	mux.Handle("GET /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadList)))
 	mux.Handle("POST /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadAdd)))
@@ -58,7 +59,7 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Cache-Control", "no-store")
 		h.Set("Content-Security-Policy", strings.Join([]string{
 			"default-src 'none'",
-			"script-src https://cdn.jsdelivr.net 'unsafe-inline'",
+			"script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'",
 			"style-src https://cdn.jsdelivr.net 'unsafe-inline'",
 			"font-src https://cdn.jsdelivr.net",
 			"img-src 'self' data: https:",

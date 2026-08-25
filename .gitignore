@@ -37,3 +37,8 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# frontend build
+/static/node_modules
+/static/dist/*
+!/static/dist/.gitkeep

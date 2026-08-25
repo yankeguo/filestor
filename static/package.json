@@ -1,0 +1,12 @@
+{
+  "name": "filestor-static",
+  "private": true,
+  "scripts": {
+    "build": "bun run build.ts",
+    "dev": "bun --watch run build.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

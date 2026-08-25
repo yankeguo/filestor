@@ -19,6 +19,7 @@ Cookie-authenticated browser for one S3-compatible bucket (Aliyun OSS, Qcloud CO
 ```bash
 cp config.example.yaml config.yaml
 # edit admin credentials and s3.*
+(cd static && bun install && bun run build)  # build the embedded frontend bundles
 go run . -config config.yaml -listen :8080
 ```
 
@@ -41,6 +42,10 @@ Open `http://127.0.0.1:8080`. Unauthenticated visits to `/browse` redirect to `/
 | `-listen` | `FILESTOR_LISTEN` | `:8080` | HTTP listen address |
 
 The container image sets `FILESTOR_CONFIG=/config.yaml`.
+
+## Frontend build
+
+Page JS lives in `static/` as a bun + TypeScript project: entries under `static/src/entries/` are bundled by `bun run build` (via `Bun.build`) into self-contained IIFE files in `static/dist/`, named `<entry>-<content-hash>.js`. `static/dist` is embedded into the binary (`go:embed`) and served at `GET /static/` with immutable caching; templates resolve the hashed name with the `{{jsAsset "entry"}}` helper, so only the entry name is referenced in HTML. During development use `bun run dev` (watch mode with inline sourcemaps); `bun run typecheck` runs `tsc --noEmit`. The Docker image builds the bundles in a bun stage.
 
 ## Config
 
@@ -88,6 +93,7 @@ All of `admin.username`, `admin.password`, and `s3.{endpoint,region,bucket,acces
 | `GET` | `/browse?prefix=&marker=` | cookie | Record view for a `YYYY/MM/YYYYMMDDhhmm-TITLE/` dir (header, stats, media preview, file list); generic contents view otherwise (`Delimiter=/`, 200 keys per page) |
 | `GET` | `/download?key=` | cookie | Sign a 5-minute GET URL (`Content-Disposition: attachment`) and 302 to the bucket |
 | `GET` | `/preview?key=` | cookie | Sign a 5-minute GET URL without attachment disposition (inline render) and 302 to the bucket |
+| `GET` | `/static/` | cookie | Embedded frontend bundles (content-hashed names, immutable cache) |
 | `GET` | `/upload` | cookie | Local workspace page (EventSource `/upload/events`) |
 | `GET` | `/upload/events` | cookie | SSE: `snapshot`, `lock`, `files`, `state`, `progress`, `done`, `error`; lagging subscribers are dropped so EventSource reconnects to a fresh snapshot |
 | `GET` | `/upload/files` | cookie | JSON list of regular files in the workspace |

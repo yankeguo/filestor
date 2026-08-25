@@ -85,7 +85,7 @@ func TestUploadPageAndList(t *testing.T) {
 	require.NotContains(t, body, "subdir")
 	require.Contains(t, body, `href="/upload"`)
 	require.Contains(t, body, "nav-link active")
-	require.Contains(t, body, `EventSource('/upload/events')`)
+	require.Contains(t, body, `<script defer src="`+jsAsset("upload")+`">`)
 	require.NotContains(t, body, "id=\"suggest-btn\"")
 
 	req = httptest.NewRequest(http.MethodGet, "/upload/files", nil)
@@ -325,7 +325,7 @@ func TestUploadPageShowsSuggestWhenLLMConfigured(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), `id="suggest-btn"`)
-	require.Contains(t, rec.Body.String(), `EventSource('/upload/events')`)
+	require.Contains(t, rec.Body.String(), `<script defer src="`+jsAsset("upload")+`">`)
 }
 
 func TestPrepWorkspace(t *testing.T) {
