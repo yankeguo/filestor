@@ -476,7 +476,8 @@ func parseSuggestTime(s string) (string, error) {
 }
 
 // readWorkspaceText reads a staged file as text: NUL-sniffed, capped at 64 KiB.
-// Office/PDF binaries are converted in a temp dir and never mutate staging.
+// Office/PDF binaries are converted (content-hash cached under .filestor/cache)
+// and never mutate staging.
 func readWorkspaceText(ctx context.Context, dir, name string) (string, error) {
 	name, err := sanitizeWorkspaceName(name)
 	if err != nil {
@@ -488,7 +489,7 @@ func readWorkspaceText(ctx context.Context, dir, name string) (string, error) {
 	}
 	src := filepath.Join(dir, name)
 	if forceTextConvertExts[ext] {
-		return convertFileToText(ctx, src)
+		return convertFileToTextCached(ctx, dir, src)
 	}
 	f, err := os.Open(src)
 	if err != nil {
@@ -500,13 +501,14 @@ func readWorkspaceText(ctx context.Context, dir, name string) (string, error) {
 		return "", err
 	}
 	if bytes.IndexByte(data, 0) >= 0 {
-		return convertFileToText(ctx, src)
+		return convertFileToTextCached(ctx, dir, src)
 	}
 	return capConvertedText(data), nil
 }
 
 // readWorkspaceImage loads a staged file as jpeg/png/gif for the model.
-// Small native jpeg/png/gif are returned as-is; anything else is converted.
+// Small native jpeg/png/gif are returned as-is; anything else is converted
+// (content-hash cached under .filestor/cache).
 func readWorkspaceImage(ctx context.Context, dir, name string) (string, []byte, error) {
 	name, err := sanitizeWorkspaceName(name)
 	if err != nil {
@@ -541,5 +543,5 @@ func readWorkspaceImage(ctx context.Context, dir, name string) (string, []byte, 
 	} else {
 		_ = f.Close()
 	}
-	return convertFileToLLMImage(ctx, src)
+	return convertFileToLLMImageCached(ctx, dir, src)
 }

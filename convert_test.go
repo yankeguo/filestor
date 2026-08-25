@@ -156,3 +156,91 @@ func TestConvertImageUnavailable(t *testing.T) {
 	_, _, err := convertFileToLLMImage(context.Background(), src)
 	require.ErrorIs(t, err, errConvertUnavailable)
 }
+
+func TestConvertFileToTextCached(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "report.docx")
+	require.NoError(t, os.WriteFile(src, []byte("PK\x03\x04binary"), 0o644))
+
+	calls := 0
+	stubConvert(t, func(name string) (string, error) {
+		if name == "soffice" {
+			return "/usr/bin/soffice", nil
+		}
+		return "", errConvertUnavailable
+	}, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		calls++
+		outdir := ""
+		for i, a := range args {
+			if a == "--outdir" && i+1 < len(args) {
+				outdir = args[i+1]
+			}
+		}
+		require.NotEmpty(t, outdir)
+		return nil, os.WriteFile(filepath.Join(outdir, "report.txt"), []byte("monthly invoice body"), 0o644)
+	})
+
+	text, err := convertFileToTextCached(context.Background(), dir, src)
+	require.NoError(t, err)
+	require.Equal(t, "monthly invoice body", text)
+	require.Equal(t, 1, calls)
+
+	// Second call hits the content-hash cache: no converter runs.
+	stubConvert(t, noBins, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatal("runCmd should not be called")
+		return nil, nil
+	})
+	text, err = convertFileToTextCached(context.Background(), dir, src)
+	require.NoError(t, err)
+	require.Equal(t, "monthly invoice body", text)
+	require.Equal(t, 1, calls)
+}
+
+func TestConvertFileToLLMImageCached(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "pic.webp")
+	require.NoError(t, os.WriteFile(src, []byte("RIFF....WEBP"), 0o644))
+
+	calls := 0
+	stubConvert(t, func(name string) (string, error) {
+		if name == "magick" {
+			return "/usr/bin/magick", nil
+		}
+		return "", errConvertUnavailable
+	}, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		calls++
+		out := args[len(args)-1]
+		return nil, os.WriteFile(out, []byte{0xff, 0xd8, 0xff, 0xd9}, 0o644)
+	})
+
+	mime, data, err := convertFileToLLMImageCached(context.Background(), dir, src)
+	require.NoError(t, err)
+	require.Equal(t, "image/jpeg", mime)
+	require.Equal(t, []byte{0xff, 0xd8, 0xff, 0xd9}, data)
+	require.Equal(t, 1, calls)
+
+	// Second call hits the content-hash cache: no converter runs.
+	stubConvert(t, noBins, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatal("runCmd should not be called")
+		return nil, nil
+	})
+	mime, data, err = convertFileToLLMImageCached(context.Background(), dir, src)
+	require.NoError(t, err)
+	require.Equal(t, "image/jpeg", mime)
+	require.Equal(t, []byte{0xff, 0xd8, 0xff, 0xd9}, data)
+	require.Equal(t, 1, calls)
+}
+
+func TestConvertCachePutAndGet(t *testing.T) {
+	dir := t.TempDir()
+	_, ok := convertCacheGet(dir, "deadbeef", ".txt")
+	require.False(t, ok)
+	convertCachePut(dir, "deadbeef", ".txt", []byte("cached"))
+	data, ok := convertCacheGet(dir, "deadbeef", ".txt")
+	require.True(t, ok)
+	require.Equal(t, "cached", string(data))
+	// Empty data is never cached.
+	convertCachePut(dir, "empty", ".txt", nil)
+	_, ok = convertCacheGet(dir, "empty", ".txt")
+	require.False(t, ok)
+}

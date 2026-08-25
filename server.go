@@ -21,6 +21,9 @@ func NewServer(cfg *Config, store ObjectStore) *Server {
 	s := &Server{Config: cfg, store: store, hub: newEventHub()}
 	if cfg != nil {
 		s.sessionKey = sessionCookieKey(cfg.Admin.Username, cfg.Admin.Password)
+		if err := prepWorkspace(s.workspaceDir()); err != nil {
+			log.Println("prepare workspace:", err)
+		}
 	}
 	return s
 }

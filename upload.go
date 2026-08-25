@@ -17,10 +17,16 @@ import (
 const (
 	uploadMaxBytes   = 2 << 30
 	uploadMaxMemory  = 32 << 20
-	uploadTempPrefix = ".upload-"
-	uploadStateFile  = ".upload-state.json"
 	uploadFilesField = "file"
 	uploadNameQuery  = "name"
+
+	// workspaceMetaDir collects every non-staged file (draft state, atomic
+	// write temp files, conversion cache) under one dot-prefixed directory,
+	// so the workspace root only ever holds staged files.
+	workspaceMetaDir   = ".filestor"
+	workspaceStateFile = "state.json"
+	workspaceTmpDir    = "tmp"
+	workspaceCacheDir  = "cache"
 )
 
 var errInvalidWorkspaceName = errors.New("invalid file name")
@@ -40,9 +46,9 @@ type uploadPageData struct {
 	CanSuggest bool
 }
 
-// workspaceState is the draft push options persisted under a dot-prefixed
-// file in the workspace, so it survives page reloads but stays invisible to
-// the staging list.
+// workspaceState is the draft push options persisted as state.json inside the
+// workspace's .filestor meta directory, so it survives page reloads but stays
+// invisible to the staging list.
 type workspaceState struct {
 	Time  string `json:"time"`
 	Title string `json:"title"`
@@ -55,6 +61,36 @@ func (s *Server) workspaceDir() string {
 	return defaultUploadWorkspace
 }
 
+func workspaceStatePath(dir string) string {
+	return filepath.Join(dir, workspaceMetaDir, workspaceStateFile)
+}
+
+func workspaceTmpPath(dir string) string {
+	return filepath.Join(dir, workspaceMetaDir, workspaceTmpDir)
+}
+
+func workspaceCachePath(dir string) string {
+	return filepath.Join(dir, workspaceMetaDir, workspaceCacheDir)
+}
+
+// prepWorkspace creates the .filestor meta directory and removes stale temp
+// files from interrupted writes and expired conversion cache entries.
+func prepWorkspace(dir string) error {
+	if err := os.MkdirAll(workspaceTmpPath(dir), 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(workspaceCachePath(dir), 0o755); err != nil {
+		return err
+	}
+	if entries, err := os.ReadDir(workspaceTmpPath(dir)); err == nil {
+		for _, e := range entries {
+			_ = os.RemoveAll(filepath.Join(workspaceTmpPath(dir), e.Name()))
+		}
+	}
+	pruneConvertCache(dir)
+	return nil
+}
+
 func sanitizeWorkspaceName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	name = strings.ReplaceAll(name, "\\", "/")
@@ -65,7 +101,7 @@ func sanitizeWorkspaceName(name string) (string, error) {
 	if strings.ContainsAny(name, `/\:`) || strings.ContainsRune(name, 0) {
 		return "", errInvalidWorkspaceName
 	}
-	// Reject dot-prefixed hidden files (covers the .upload- temp prefix too).
+	// Reject dot-prefixed hidden files (covers the .filestor meta dir too).
 	if strings.HasPrefix(name, ".") {
 		return "", errInvalidWorkspaceName
 	}
@@ -82,7 +118,8 @@ func listWorkspaceFiles(dir string) ([]workspaceFile, error) {
 	}
 	out := make([]workspaceFile, 0, len(entries))
 	for _, e := range entries {
-		// Skip subdirectories and dot-prefixed hidden files (incl. .upload- temp files).
+		// Skip subdirectories and dot-prefixed hidden files (incl. the
+		// .filestor meta directory).
 		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
@@ -108,10 +145,10 @@ func saveWorkspaceFile(dir, name string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(workspaceTmpPath(dir), 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, uploadTempPrefix+"*")
+	tmp, err := os.CreateTemp(workspaceTmpPath(dir), "tmp-*")
 	if err != nil {
 		return err
 	}
@@ -139,7 +176,7 @@ func removeWorkspaceFile(dir, name string) error {
 
 func loadWorkspaceState(dir string) workspaceState {
 	var st workspaceState
-	data, err := os.ReadFile(filepath.Join(dir, uploadStateFile))
+	data, err := os.ReadFile(workspaceStatePath(dir))
 	if err != nil {
 		return st
 	}
@@ -154,7 +191,10 @@ func saveWorkspaceState(dir string, st workspaceState) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, uploadTempPrefix+"*")
+	if err := os.MkdirAll(workspaceTmpPath(dir), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(workspaceTmpPath(dir), "tmp-*")
 	if err != nil {
 		return err
 	}
@@ -167,17 +207,17 @@ func saveWorkspaceState(dir string, st workspaceState) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, filepath.Join(dir, uploadStateFile))
+	return os.Rename(tmpName, workspaceStatePath(dir))
 }
 
 func clearWorkspaceState(dir string) {
-	_ = os.Remove(filepath.Join(dir, uploadStateFile))
+	_ = os.Remove(workspaceStatePath(dir))
 }
 
 // pinWorkspaceState writes the first-file draft (time=now, title="") only when
 // no state file exists yet.
 func pinWorkspaceState(dir string) {
-	if _, err := os.Stat(filepath.Join(dir, uploadStateFile)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(workspaceStatePath(dir)); !errors.Is(err, os.ErrNotExist) {
 		return
 	}
 	if err := saveWorkspaceState(dir, workspaceState{Time: time.Now().Format(pushTimeLayout)}); err != nil {

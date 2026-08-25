@@ -121,10 +121,11 @@ func TestUploadPushSuccess(t *testing.T) {
 		"2026/08/202608240659-weekly-report/b.txt",
 	}, store.putKeys())
 
-	// Uploaded files are removed from the staging workspace.
-	entries, err := os.ReadDir(cfg.Upload.Workspace)
+	// Uploaded files are removed from the staging workspace (the .filestor
+	// meta directory stays behind).
+	files, err := listWorkspaceFiles(cfg.Upload.Workspace)
 	require.NoError(t, err)
-	require.Empty(t, entries)
+	require.Empty(t, files)
 	// The pinned push state is cleared too.
 	require.Equal(t, workspaceState{}, loadWorkspaceState(cfg.Upload.Workspace))
 }

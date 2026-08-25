@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,7 +16,10 @@ import (
 	"time"
 )
 
-const convertTimeout = 45 * time.Second
+const (
+	convertTimeout  = 45 * time.Second
+	convertCacheTTL = 7 * 24 * time.Hour
+)
 
 var (
 	errConvertUnavailable = errors.New("conversion tools not installed")
@@ -297,4 +303,110 @@ func convertFileToLLMImage(ctx context.Context, src string) (string, []byte, err
 		}
 	}
 	return "", nil, errors.New("could not convert file to jpeg/png/gif")
+}
+
+// hashFileSHA256 returns the hex content hash used as the conversion cache key.
+func hashFileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// convertCacheGet returns the cached conversion output for a content hash.
+func convertCacheGet(dir, key, ext string) ([]byte, bool) {
+	data, err := os.ReadFile(filepath.Join(workspaceCachePath(dir), key+ext))
+	if err != nil || len(data) == 0 {
+		return nil, false
+	}
+	return data, true
+}
+
+// convertCachePut stores a conversion result atomically and prunes expired
+// entries on the way out (best-effort).
+func convertCachePut(dir, key, ext string, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	if err := os.MkdirAll(workspaceCachePath(dir), 0o755); err != nil {
+		return
+	}
+	tmp, err := os.CreateTemp(workspaceCachePath(dir), "tmp-*")
+	if err != nil {
+		return
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		return
+	}
+	if err := os.Rename(tmpName, filepath.Join(workspaceCachePath(dir), key+ext)); err != nil {
+		return
+	}
+	pruneConvertCache(dir)
+}
+
+// pruneConvertCache removes cache entries older than convertCacheTTL.
+func pruneConvertCache(dir string) {
+	entries, err := os.ReadDir(workspaceCachePath(dir))
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-convertCacheTTL)
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(workspaceCachePath(dir), e.Name()))
+	}
+}
+
+// convertFileToTextCached converts like convertFileToText but memoizes the
+// result under the workspace's .filestor/cache, keyed by the source content
+// hash, so re-reading a staged file skips the external converters.
+func convertFileToTextCached(ctx context.Context, dir, src string) (string, error) {
+	key, err := hashFileSHA256(src)
+	if err == nil {
+		if data, ok := convertCacheGet(dir, key, ".txt"); ok {
+			return string(data), nil
+		}
+	}
+	text, err := convertFileToText(ctx, src)
+	if err != nil {
+		return "", err
+	}
+	if key != "" {
+		convertCachePut(dir, key, ".txt", []byte(text))
+	}
+	return text, nil
+}
+
+// convertFileToLLMImageCached is the cached counterpart of
+// convertFileToLLMImage; cached entries are always jpeg.
+func convertFileToLLMImageCached(ctx context.Context, dir, src string) (string, []byte, error) {
+	key, err := hashFileSHA256(src)
+	if err == nil {
+		if data, ok := convertCacheGet(dir, key, ".jpg"); ok {
+			return "image/jpeg", data, nil
+		}
+	}
+	mime, data, err := convertFileToLLMImage(ctx, src)
+	if err != nil {
+		return "", nil, err
+	}
+	if key != "" && mime == "image/jpeg" {
+		convertCachePut(dir, key, ".jpg", data)
+	}
+	return mime, data, nil
 }

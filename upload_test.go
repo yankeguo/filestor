@@ -41,7 +41,7 @@ func TestSanitizeWorkspaceName(t *testing.T) {
 		{".hidden", "", true},
 		{".gitignore", "", true},
 		{"dir/.hidden", "", true},
-		{uploadTempPrefix + "x", "", true},
+		{workspaceMetaDir, "", true},
 	}
 	for _, tc := range cases {
 		got, err := sanitizeWorkspaceName(tc.in)
@@ -326,4 +326,30 @@ func TestUploadPageShowsSuggestWhenLLMConfigured(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), `id="suggest-btn"`)
 	require.Contains(t, rec.Body.String(), `EventSource('/upload/events')`)
+}
+
+func TestPrepWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	// Fresh and expired cache entries, plus an interrupted tmp write.
+	require.NoError(t, os.MkdirAll(workspaceCachePath(dir), 0o755))
+	fresh := filepath.Join(workspaceCachePath(dir), strings.Repeat("a", 64)+".txt")
+	expired := filepath.Join(workspaceCachePath(dir), strings.Repeat("b", 64)+".txt")
+	require.NoError(t, os.WriteFile(fresh, []byte("new"), 0o644))
+	require.NoError(t, os.WriteFile(expired, []byte("old"), 0o644))
+	old := time.Now().Add(-2 * convertCacheTTL)
+	require.NoError(t, os.Chtimes(expired, old, old))
+	require.NoError(t, os.MkdirAll(workspaceTmpPath(dir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceTmpPath(dir), "tmp-stale"), []byte("junk"), 0o644))
+
+	require.NoError(t, prepWorkspace(dir))
+
+	// Temp junk gone, staged files untouched.
+	entries, err := os.ReadDir(workspaceTmpPath(dir))
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	// Cache pruned by TTL: fresh kept, expired removed.
+	_, err = os.Stat(fresh)
+	require.NoError(t, err)
+	_, err = os.Stat(expired)
+	require.True(t, os.IsNotExist(err))
 }
