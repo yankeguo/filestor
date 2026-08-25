@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,12 @@ type fileEntry struct {
 	Key          string
 	Size         string
 	LastModified string
+	SizeBytes    int64
+	// Record view extras: type icon, inline-preview kind ("image"/"video"/
+	// "audio") and the signed preview URL (empty when preview is unavailable).
+	Icon       string
+	Kind       string
+	PreviewURL string
 }
 
 type browseData struct {
@@ -35,6 +42,17 @@ type browseData struct {
 	Files      []fileEntry
 	NextMarker string
 	Prefix     string
+
+	// Record mode (dedicated view for a YYYY/MM/YYYYMMDDhhmm-TITLE/ dir).
+	Record    bool
+	Title     string
+	Date      string // YYYY-MM-DD
+	TimeHM    string // hh:mm
+	BackMonth string // YYYY-MM
+	FileCount int
+	TotalSize string
+	HasImages bool
+	HasMedia  bool
 
 	// Calendar mode.
 	Month       string
@@ -153,9 +171,123 @@ func buildBrowseData(prefix string, page ListPage) browseData {
 			Key:          obj.Key,
 			Size:         formatSize(obj.Size),
 			LastModified: formatTime(obj.LastModified),
+			SizeBytes:    obj.Size,
 		})
 	}
 	return data
+}
+
+// parseRecordPrefix matches the fixed YYYY/MM/YYYYMMDDhhmm-TITLE/ layout and
+// returns the record's display date (YYYY-MM-DD), time (hh:mm) and title.
+func parseRecordPrefix(prefix string) (date, hm, title string, ok bool) {
+	parts := strings.Split(strings.Trim(prefix, "/"), "/")
+	if len(parts) != 3 || len(parts[0]) != 4 || !isDigits(parts[0]) ||
+		len(parts[1]) != 2 || !isDigits(parts[1]) {
+		return "", "", "", false
+	}
+	hm, title = splitDayDir(parts[2])
+	if hm == "" {
+		return "", "", "", false
+	}
+	name := parts[2]
+	date = name[:4] + "-" + name[4:6] + "-" + name[6:8]
+	return date, hm, title, true
+}
+
+func fileExt(name string) string {
+	i := strings.LastIndexByte(name, '.')
+	if i < 0 {
+		return ""
+	}
+	return strings.ToLower(name[i+1:])
+}
+
+// fileIcon picks a Bootstrap Icons class from the file extension.
+func fileIcon(name string) string {
+	switch fileExt(name) {
+	case "jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "svg", "ico", "heic":
+		return "bi-file-earmark-image"
+	case "mp4", "m4v", "webm", "mov", "mkv", "avi":
+		return "bi-file-earmark-play"
+	case "mp3", "wav", "ogg", "m4a", "flac", "aac":
+		return "bi-file-earmark-music"
+	case "pdf":
+		return "bi-file-earmark-pdf"
+	case "txt", "md", "log", "json", "yaml", "yml", "xml", "csv":
+		return "bi-file-earmark-text"
+	case "doc", "docx":
+		return "bi-file-earmark-word"
+	case "xls", "xlsx":
+		return "bi-file-earmark-excel"
+	case "ppt", "pptx":
+		return "bi-file-earmark-ppt"
+	case "zip", "tar", "gz", "tgz", "rar", "7z":
+		return "bi-file-earmark-zip"
+	default:
+		return "bi-file-earmark"
+	}
+}
+
+// previewKind reports the inline player for browser-native media; other files
+// stay download-only.
+func previewKind(name string) string {
+	switch fileExt(name) {
+	case "jpg", "jpeg", "png", "gif", "webp", "avif", "bmp":
+		return "image"
+	case "mp4", "m4v", "webm":
+		return "video"
+	case "mp3", "wav", "ogg", "m4a", "flac", "aac":
+		return "audio"
+	default:
+		return ""
+	}
+}
+
+// imagePreviewMaxSize caps inline image previews; larger images keep the
+// download-only row so the page stays light.
+const imagePreviewMaxSize = 32 << 20
+
+// decorateRecord upgrades a contents listing of a record directory into the
+// dedicated record view: parsed header, file stats, type icons and signed
+// inline-preview URLs for browser-native media. It is a no-op for prefixes
+// outside the fixed YYYY/MM/YYYYMMDDhhmm-TITLE/ layout.
+func decorateRecord(data *browseData, store ObjectStore) {
+	date, hm, title, ok := parseRecordPrefix(data.Prefix)
+	if !ok {
+		return
+	}
+	data.Record = true
+	data.Date = date
+	data.TimeHM = hm
+	data.Title = title
+	data.BackMonth = date[:7]
+	var total int64
+	for i := range data.Files {
+		f := &data.Files[i]
+		f.Icon = fileIcon(f.Name)
+		total += f.SizeBytes
+		kind := previewKind(f.Name)
+		if kind == "image" && f.SizeBytes > imagePreviewMaxSize {
+			kind = ""
+		}
+		if kind == "" || store == nil {
+			continue
+		}
+		u, err := store.SignPreviewURL(f.Key, signURLTTL)
+		if err != nil {
+			log.Println("sign preview:", err)
+			continue
+		}
+		f.Kind = kind
+		f.PreviewURL = u
+		if kind == "image" {
+			data.HasImages = true
+		} else {
+			data.HasMedia = true
+		}
+	}
+	data.FileCount = len(data.Files)
+	data.TotalSize = formatSize(total)
 }
 
 const (

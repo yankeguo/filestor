@@ -36,6 +36,7 @@ type ListPage struct {
 type ObjectStore interface {
 	List(prefix, marker string) (ListPage, error)
 	SignGetURL(key string, ttl time.Duration) (string, error)
+	SignPreviewURL(key string, ttl time.Duration) (string, error)
 	Put(key string, r io.Reader, size int64) error
 }
 
@@ -105,17 +106,30 @@ func (s *s3Store) Put(key string, r io.Reader, size int64) error {
 }
 
 func (s *s3Store) SignGetURL(key string, ttl time.Duration) (string, error) {
+	return s.signGet(key, ttl, attachmentDisposition(key))
+}
+
+// SignPreviewURL signs a GET URL without a Content-Disposition override so the
+// browser renders the object inline (image/video/audio preview).
+func (s *s3Store) SignPreviewURL(key string, ttl time.Duration) (string, error) {
+	return s.signGet(key, ttl, "")
+}
+
+func (s *s3Store) signGet(key string, ttl time.Duration, disposition string) (string, error) {
 	if ttl <= 0 {
 		ttl = signURLTTL
 	}
 	presign := s3.NewPresignClient(s.client, func(o *s3.PresignOptions) {
 		o.Expires = ttl
 	})
-	out, err := presign.PresignGetObject(context.Background(), &s3.GetObjectInput{
-		Bucket:                     aws.String(s.bucket),
-		Key:                        aws.String(key),
-		ResponseContentDisposition: aws.String(attachmentDisposition(key)),
-	})
+	in := &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	}
+	if disposition != "" {
+		in.ResponseContentDisposition = aws.String(disposition)
+	}
+	out, err := presign.PresignGetObject(context.Background(), in)
 	if err != nil {
 		return "", err
 	}

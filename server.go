@@ -37,6 +37,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.handleRoot)
 	mux.Handle("GET /browse", s.requireAuth(http.HandlerFunc(s.handleBrowse)))
 	mux.Handle("GET /download", s.requireAuth(http.HandlerFunc(s.handleDownload)))
+	mux.Handle("GET /preview", s.requireAuth(http.HandlerFunc(s.handlePreview)))
 	mux.Handle("GET /upload", s.requireAuth(http.HandlerFunc(s.handleUploadPage)))
 	mux.Handle("GET /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadList)))
 	mux.Handle("POST /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadAdd)))
@@ -60,8 +61,8 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 			"script-src https://cdn.jsdelivr.net 'unsafe-inline'",
 			"style-src https://cdn.jsdelivr.net 'unsafe-inline'",
 			"font-src https://cdn.jsdelivr.net",
-			"img-src 'self' data:",
-			"media-src 'self'",
+			"img-src 'self' data: https:",
+			"media-src 'self' https:",
 			"connect-src 'self'",
 			"form-action 'self'",
 			"base-uri 'none'",
@@ -129,6 +130,9 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		}
 		data := buildBrowseData(prefix, page)
 		data.Contents = true
+		// Record directories get the dedicated record view instead of the
+		// generic contents table.
+		decorateRecord(&data, s.store)
 		s.render(w, "home.html", data)
 		return
 	}
@@ -185,6 +189,30 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	signed, err := s.store.SignGetURL(key, signURLTTL)
+	if err != nil {
+		log.Println("sign url:", err)
+		http.Error(w, "sign failed", http.StatusBadGateway)
+		return
+	}
+	http.Redirect(w, r, signed, http.StatusFound)
+}
+
+func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "object store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	key := strings.TrimSpace(r.URL.Query().Get("key"))
+	if key == "" {
+		http.Error(w, "missing key", http.StatusBadRequest)
+		return
+	}
+	if strings.ContainsRune(key, 0) || strings.ContainsAny(key, "\r\n") {
+		http.Error(w, "invalid key", http.StatusBadRequest)
+		return
+	}
+	// No attachment disposition: the browser renders the object inline.
+	signed, err := s.store.SignPreviewURL(key, signURLTTL)
 	if err != nil {
 		log.Println("sign url:", err)
 		http.Error(w, "sign failed", http.StatusBadGateway)

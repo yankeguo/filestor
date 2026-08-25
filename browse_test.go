@@ -26,6 +26,9 @@ type fakeStore struct {
 	lastKey  string
 	listFn   func(prefix, marker string) (ListPage, error)
 
+	previewSigned  string
+	lastPreviewKey string
+
 	putErr   error
 	putHook  func(key string)
 	putBlock chan struct{}
@@ -50,6 +53,17 @@ func (f *fakeStore) SignGetURL(key string, ttl time.Duration) (string, error) {
 		return f.signed, nil
 	}
 	return "https://example.oss-cn-hangzhou.aliyuncs.com/" + url.PathEscape(key) + "?sig=1", nil
+}
+
+func (f *fakeStore) SignPreviewURL(key string, ttl time.Duration) (string, error) {
+	f.lastPreviewKey = key
+	if f.err != nil {
+		return "", f.err
+	}
+	if f.previewSigned != "" {
+		return f.previewSigned, nil
+	}
+	return "https://example.oss-cn-hangzhou.aliyuncs.com/preview/" + url.PathEscape(key) + "?sig=1", nil
 }
 
 func (f *fakeStore) Put(key string, r io.Reader, size int64) error {
@@ -238,6 +252,116 @@ func TestBrowseNextPage(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Contains(t, rec.Body.String(), "marker=a.txt")
+}
+
+func TestBrowseRecordView(t *testing.T) {
+	store := &fakeStore{page: ListPage{Objects: []ObjectInfo{
+		{Key: "2026/08/202608240659-weekly-report/photo.jpg", Size: 1024},
+		{Key: "2026/08/202608240659-weekly-report/clip.mp4", Size: 2048},
+		{Key: "2026/08/202608240659-weekly-report/voice.mp3", Size: 512},
+		{Key: "2026/08/202608240659-weekly-report/notes.pdf", Size: 512},
+	}}}
+	h := NewServer(testCfg(), store).Handler()
+	cookie := loginCookie(t, h)
+
+	req := httptest.NewRequest(http.MethodGet, "/browse?prefix=2026/08/202608240659-weekly-report/", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "2026/08/202608240659-weekly-report/", store.lastList[0])
+	body := rec.Body.String()
+	// Dedicated header: parsed title, date and time, back link to the day.
+	require.Contains(t, body, "<h4 class=\"mb-1\">weekly-report</h4>")
+	require.Contains(t, body, "2026-08-24")
+	require.Contains(t, body, "06:59")
+	require.Contains(t, body, `/browse?month=2026-08&day=2026-08-24`)
+	// Stats line.
+	require.Contains(t, body, "4 files")
+	// Inline previews for browser-native media, signed via the store.
+	require.Contains(t, body, "<img")
+	require.Contains(t, body, "<video")
+	require.Contains(t, body, "<audio")
+	require.Contains(t, body, "example.oss-cn-hangzhou.aliyuncs.com/preview/")
+	// Non-previewable files keep a typed icon and download-only row.
+	require.Contains(t, body, "bi-file-earmark-pdf")
+	require.Contains(t, body, `/download?key=2026%2f08%2f202608240659-weekly-report%2fnotes.pdf`)
+	// The generic breadcrumbs view is not rendered.
+	require.NotContains(t, body, "breadcrumb")
+}
+
+func TestBrowseRecordViewSkipsOversizedImagePreview(t *testing.T) {
+	store := &fakeStore{page: ListPage{Objects: []ObjectInfo{
+		{Key: "2026/08/202608240659-x/big.jpg", Size: imagePreviewMaxSize + 1},
+	}}}
+	h := NewServer(testCfg(), store).Handler()
+	cookie := loginCookie(t, h)
+
+	req := httptest.NewRequest(http.MethodGet, "/browse?prefix=2026/08/202608240659-x/", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.NotContains(t, body, "<img")
+	require.Contains(t, body, "bi-file-earmark-image")
+}
+
+func TestParseRecordPrefix(t *testing.T) {
+	date, hm, title, ok := parseRecordPrefix("2026/08/202608240659-weekly-report/")
+	require.True(t, ok)
+	require.Equal(t, "2026-08-24", date)
+	require.Equal(t, "06:59", hm)
+	require.Equal(t, "weekly-report", title)
+
+	for _, p := range []string{
+		"",
+		"docs/",
+		"2026/08/",
+		"2026/08/legacy-dir/",
+		"2026/08/202608240659-x/extra/",
+		"2x26/08/202608240659-x/",
+	} {
+		_, _, _, ok := parseRecordPrefix(p)
+		require.False(t, ok, p)
+	}
+}
+
+func TestPreviewKindAndFileIcon(t *testing.T) {
+	require.Equal(t, "image", previewKind("a.JPG"))
+	require.Equal(t, "video", previewKind("a.mp4"))
+	require.Equal(t, "audio", previewKind("a.mp3"))
+	require.Equal(t, "", previewKind("a.pdf"))
+	require.Equal(t, "", previewKind("a"))
+
+	require.Equal(t, "bi-file-earmark-image", fileIcon("a.png"))
+	require.Equal(t, "bi-file-earmark-pdf", fileIcon("a.pdf"))
+	require.Equal(t, "bi-file-earmark-word", fileIcon("a.docx"))
+	require.Equal(t, "bi-file-earmark-zip", fileIcon("a.tar.gz"))
+	require.Equal(t, "bi-file-earmark", fileIcon("a"))
+}
+
+func TestPreviewRedirectsToInlineSignedURL(t *testing.T) {
+	store := &fakeStore{previewSigned: "https://oss.example/inline"}
+	h := NewServer(testCfg(), store).Handler()
+	cookie := loginCookie(t, h)
+
+	req := httptest.NewRequest(http.MethodGet, "/preview?key=docs/a.jpg", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusFound, rec.Code)
+	require.Equal(t, "https://oss.example/inline", rec.Header().Get("Location"))
+	require.Equal(t, "docs/a.jpg", store.lastPreviewKey)
+}
+
+func TestPreviewRequiresLogin(t *testing.T) {
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
+	req := httptest.NewRequest(http.MethodGet, "/preview?key=a.jpg", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusFound, rec.Code)
+	require.Equal(t, "/login", rec.Header().Get("Location"))
 }
 
 func TestDownloadRedirectsToSignedURL(t *testing.T) {
