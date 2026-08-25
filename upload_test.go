@@ -358,3 +358,52 @@ func TestPrepWorkspace(t *testing.T) {
 	_, err = os.Stat(expired)
 	require.True(t, os.IsNotExist(err))
 }
+
+func TestRenameWorkspaceFile(t *testing.T) {
+	setup := func(t *testing.T) string {
+		t.Helper()
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "b.txt"), []byte("bbb"), 0o644))
+		return dir
+	}
+
+	t.Run("ok", func(t *testing.T) {
+		dir := setup(t)
+		require.NoError(t, renameWorkspaceFile(dir, "a.txt", "renamed.txt"))
+		data, err := os.ReadFile(filepath.Join(dir, "renamed.txt"))
+		require.NoError(t, err)
+		require.Equal(t, "aaa", string(data))
+		_, err = os.Stat(filepath.Join(dir, "a.txt"))
+		require.True(t, os.IsNotExist(err))
+	})
+
+	t.Run("same name", func(t *testing.T) {
+		dir := setup(t)
+		require.Error(t, renameWorkspaceFile(dir, "a.txt", "a.txt"))
+	})
+
+	t.Run("source missing", func(t *testing.T) {
+		dir := setup(t)
+		err := renameWorkspaceFile(dir, "missing.txt", "renamed.txt")
+		require.ErrorIs(t, err, os.ErrNotExist)
+	})
+
+	t.Run("target exists", func(t *testing.T) {
+		dir := setup(t)
+		require.Error(t, renameWorkspaceFile(dir, "a.txt", "b.txt"))
+		// Neither file is touched.
+		for name, want := range map[string]string{"a.txt": "aaa", "b.txt": "bbb"} {
+			data, err := os.ReadFile(filepath.Join(dir, name))
+			require.NoError(t, err)
+			require.Equal(t, want, string(data))
+		}
+	})
+
+	t.Run("invalid new name", func(t *testing.T) {
+		dir := setup(t)
+		for _, bad := range []string{"", ".hidden", "a\x00b.txt"} {
+			require.Error(t, renameWorkspaceFile(dir, "a.txt", bad), "%q", bad)
+		}
+	})
+}

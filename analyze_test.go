@@ -76,7 +76,7 @@ func TestUploadAnalyzeSuccess(t *testing.T) {
 			require.Equal(t, "test-model", req.Model)
 			require.Equal(t, "high", req.ReasoningEffort)
 			require.Equal(t, "Bearer token", r.Header.Get("Authorization"))
-			require.Len(t, req.Tools, 4)
+			require.Len(t, req.Tools, 5)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c1","type":"function","function":{"name":"read_file_as_text","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
 		case 2:
@@ -106,6 +106,65 @@ func TestUploadAnalyzeSuccess(t *testing.T) {
 	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "weekly-report", Analyzed: true}, loadWorkspaceState(dir))
 	require.Equal(t, "weekly-report", app.lastJob().Title)
 	require.Empty(t, app.lastJob().Error)
+}
+
+func TestUploadAnalyzeRename(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "IMG_2048.txt"), []byte("invoice for march"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "march-invoice.txt"), []byte("other"), 0o644))
+
+	llm := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+		switch call {
+		case 1:
+			// The target name is taken: the rename must fail without touching
+			// either file.
+			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+				`{"id":"c1","type":"function","function":{"name":"rename_file","arguments":"{\"name\":\"IMG_2048.txt\",\"new_name\":\"march-invoice.txt\"}"}}]}}]}`
+		case 2:
+			found := false
+			for _, m := range req.Messages {
+				if s, ok := m.Content.(string); ok && m.Role == "tool" && strings.Contains(s, "error:") {
+					found = true
+				}
+			}
+			require.True(t, found, "rename conflict must surface as a tool error")
+			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+				`{"id":"c2","type":"function","function":{"name":"rename_file","arguments":"{\"name\":\"IMG_2048.txt\",\"new_name\":\"2026-03-invoice.txt\"}"}}]}}]}`
+		case 3:
+			// The tool reply echoes the new name so later reads can use it.
+			found := false
+			for _, m := range req.Messages {
+				if s, ok := m.Content.(string); ok && m.Role == "tool" && strings.Contains(s, "renamed to 2026-03-invoice.txt") {
+					found = true
+				}
+			}
+			require.True(t, found)
+			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+				`{"id":"c3","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"march-invoice\"}"}}]}}]}`
+		default:
+			t.Fatalf("unexpected extra LLM call %d", call)
+			return ""
+		}
+	})
+	cfg.LLM = LLMConfig{URL: llm.URL, Model: "test-model"}
+
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
+	cookie := loginCookie(t, h)
+	require.Equal(t, http.StatusAccepted, postAnalyze(t, h, cookie).Code)
+	awaitIdle(t, app)
+	require.Equal(t, "march-invoice", loadWorkspaceState(dir).Title)
+
+	// The rename landed on disk; the conflicting file kept its content.
+	data, err := os.ReadFile(filepath.Join(dir, "2026-03-invoice.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "invoice for march", string(data))
+	_, err = os.Stat(filepath.Join(dir, "IMG_2048.txt"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	data, err = os.ReadFile(filepath.Join(dir, "march-invoice.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "other", string(data))
 }
 
 func TestUploadAnalyzeImageTool(t *testing.T) {

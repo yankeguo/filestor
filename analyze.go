@@ -31,6 +31,7 @@ const analyzeSystemPrompt = `You invent a short, descriptive title for a batch o
 - read_file_as_text and read_file_as_image convert office documents, PDFs, and other formats automatically; you do not need to care about the conversion.
 - The title should be a short phrase (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单".
 - If the contents contain a clear document date or datetime, call set_datetime with it (YYYY-MM-DD or YYYY-MM-DDTHH:mm). Do not guess. Call it before or in the same turn as set_title.
+- If a staged file's name is clearly messy or uninformative — camera/scanner codes like "IMG_2048.jpg" or "SCAN_0001.pdf", timestamp-only screenshot names, random hashes, placeholder names like "untitled" or "新建文档", or redundant noise like "final2", "copy of", "(1)" — and you are confident about its content (from the name, peek, or a read), call rename_file with a short, descriptive new name in the same language as the content. Keep the extension unchanged; use only letters, digits, dash, underscore, dot; rename each file at most once; never pick a name another staged file already has. When in doubt, keep the original name — renaming is optional and must not delay set_title.
 - When you have decided, call set_title exactly once with the raw title. Decide quickly: reading every file is rarely necessary.`
 
 type chatImageURL struct {
@@ -113,6 +114,18 @@ var analyzeTools = []chatTool{
 	nameParamTool("read_file_as_text", "Read a staged file as text. Office documents and PDFs are converted automatically."),
 	nameParamTool("read_file_as_image", "Load a staged file as an image (jpeg/png/gif). Oversized or other formats are converted automatically."),
 	{Type: "function", Function: chatToolFunction{
+		Name:        "rename_file",
+		Description: "Rename a staged file whose name is messy or uninformative. Only when confident about the content; keep the extension unchanged.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":     map[string]any{"type": "string", "description": "File name from the staged file list"},
+				"new_name": map[string]any{"type": "string", "description": "Short, descriptive new file name with the original extension"},
+			},
+			"required": []string{"name", "new_name"},
+		},
+	}},
+	{Type: "function", Function: chatToolFunction{
 		Name:        "set_title",
 		Description: "Set the upload title. Call exactly once when you have decided.",
 		Parameters: map[string]any{
@@ -138,7 +151,7 @@ var analyzeTools = []chatTool{
 
 // analyzeDecisionTools are the only tools offered when forcing a decision
 // after the read budget is spent (set_title and set_datetime).
-var analyzeDecisionTools = analyzeTools[2:]
+var analyzeDecisionTools = analyzeTools[3:]
 
 // analyzeAgent runs the chat-completions tool loop against the configured
 // OpenAI-compatible endpoint.
@@ -151,6 +164,7 @@ type analyzeAgent struct {
 	readsClosed bool
 	onProgress  func(jobProgress)
 	onState     func()
+	onFiles     func()
 }
 
 func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +197,9 @@ func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
 		},
 		onState: func() {
 			s.emitState()
+		},
+		onFiles: func() {
+			s.emitFiles()
 		},
 	}
 	s.emitProgress(jobProgress{Kind: lockAnalyze, Message: "starting", Total: analyzeMaxRounds}, false)
@@ -366,9 +383,10 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 		return chatMessage{Role: "tool", ToolCallID: tc.ID, Content: text}, nil
 	}
 	var args struct {
-		Name  string `json:"name"`
-		Title string `json:"title"`
-		Time  string `json:"time"`
+		Name    string `json:"name"`
+		NewName string `json:"new_name"`
+		Title   string `json:"title"`
+		Time    string `json:"time"`
 	}
 	if err := unmarshalToolArgs(tc.Function.Arguments, &args); err != nil {
 		return reply("invalid arguments: " + err.Error())
@@ -394,6 +412,17 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 				Type:     "image_url",
 				ImageURL: &chatImageURL{URL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)},
 			}}}}
+	case "rename_file":
+		if err := renameWorkspaceFile(a.dir, args.Name, args.NewName); err != nil {
+			return reply("error: " + err.Error())
+		}
+		if a.onFiles != nil {
+			a.onFiles()
+		}
+		// Echo the new name so later read calls use it; the file list in the
+		// initial user message still shows the old one.
+		newName, _ := sanitizeWorkspaceName(args.NewName)
+		return reply("renamed to " + newName)
 	case "set_title":
 		title := strings.TrimSpace(args.Title)
 		if title == "" {

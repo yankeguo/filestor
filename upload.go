@@ -178,6 +178,33 @@ func removeWorkspaceFile(dir, name string) error {
 	return os.Remove(filepath.Join(dir, name))
 }
 
+// renameWorkspaceFile renames a staged file, refusing to overwrite a different
+// existing file. A target that stats to the same file (a case-only change on a
+// case-insensitive filesystem) is allowed through.
+func renameWorkspaceFile(dir, oldName, newName string) error {
+	oldName, err := sanitizeWorkspaceName(oldName)
+	if err != nil {
+		return err
+	}
+	newName, err = sanitizeWorkspaceName(newName)
+	if err != nil {
+		return err
+	}
+	if oldName == newName {
+		return errors.New("new name equals old name")
+	}
+	src := filepath.Join(dir, oldName)
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	dst := filepath.Join(dir, newName)
+	if dstInfo, err := os.Stat(dst); err == nil && !os.SameFile(srcInfo, dstInfo) {
+		return errors.New("a file with the new name already exists")
+	}
+	return os.Rename(src, dst)
+}
+
 func loadWorkspaceState(dir string) workspaceState {
 	var st workspaceState
 	data, err := os.ReadFile(workspaceStatePath(dir))
