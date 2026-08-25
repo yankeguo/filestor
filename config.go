@@ -12,7 +12,7 @@ const defaultUploadWorkspace = "upload-workspace"
 
 type Config struct {
 	Admin  AdminConfig  `yaml:"admin"`
-	Aliyun AliyunConfig `yaml:"aliyun"`
+	S3     S3Config     `yaml:"s3"`
 	Upload UploadConfig `yaml:"upload"`
 	LLM    LLMConfig    `yaml:"llm"`
 }
@@ -22,15 +22,16 @@ type AdminConfig struct {
 	Password string `yaml:"password"`
 }
 
-type AliyunConfig struct {
-	OSS OSSConfig `yaml:"oss"`
-}
-
-type OSSConfig struct {
+// S3Config targets any S3-compatible object storage (Aliyun OSS, Qcloud COS,
+// AWS S3, MinIO, ...). force_path_style is only needed by vendors that do not
+// support virtual-hosted buckets (e.g. MinIO).
+type S3Config struct {
 	Endpoint        string `yaml:"endpoint"`
+	Region          string `yaml:"region"`
 	Bucket          string `yaml:"bucket"`
 	AccessKeyID     string `yaml:"access_key_id"`
-	AccessKeySecret string `yaml:"access_key_secret"`
+	SecretAccessKey string `yaml:"secret_access_key"`
+	ForcePathStyle  bool   `yaml:"force_path_style"`
 }
 
 type UploadConfig struct {
@@ -72,21 +73,25 @@ func (c *Config) validate() error {
 	if c.Admin.Password == "" {
 		return fmt.Errorf("config: admin.password is required")
 	}
-	c.Aliyun.OSS.Endpoint = normalizeOSSEndpoint(c.Aliyun.OSS.Endpoint)
-	c.Aliyun.OSS.Bucket = strings.TrimSpace(c.Aliyun.OSS.Bucket)
-	c.Aliyun.OSS.AccessKeyID = strings.TrimSpace(c.Aliyun.OSS.AccessKeyID)
-	c.Aliyun.OSS.AccessKeySecret = strings.TrimSpace(c.Aliyun.OSS.AccessKeySecret)
-	if c.Aliyun.OSS.Endpoint == "" {
-		return fmt.Errorf("config: aliyun.oss.endpoint is required")
+	c.S3.Endpoint = normalizeEndpoint(c.S3.Endpoint)
+	c.S3.Region = strings.TrimSpace(c.S3.Region)
+	c.S3.Bucket = strings.TrimSpace(c.S3.Bucket)
+	c.S3.AccessKeyID = strings.TrimSpace(c.S3.AccessKeyID)
+	c.S3.SecretAccessKey = strings.TrimSpace(c.S3.SecretAccessKey)
+	if c.S3.Endpoint == "" {
+		return fmt.Errorf("config: s3.endpoint is required")
 	}
-	if c.Aliyun.OSS.Bucket == "" {
-		return fmt.Errorf("config: aliyun.oss.bucket is required")
+	if c.S3.Region == "" {
+		return fmt.Errorf("config: s3.region is required")
 	}
-	if c.Aliyun.OSS.AccessKeyID == "" {
-		return fmt.Errorf("config: aliyun.oss.access_key_id is required")
+	if c.S3.Bucket == "" {
+		return fmt.Errorf("config: s3.bucket is required")
 	}
-	if c.Aliyun.OSS.AccessKeySecret == "" {
-		return fmt.Errorf("config: aliyun.oss.access_key_secret is required")
+	if c.S3.AccessKeyID == "" {
+		return fmt.Errorf("config: s3.access_key_id is required")
+	}
+	if c.S3.SecretAccessKey == "" {
+		return fmt.Errorf("config: s3.secret_access_key is required")
 	}
 	c.Upload.Workspace = strings.TrimSpace(c.Upload.Workspace)
 	if c.Upload.Workspace == "" {
@@ -112,7 +117,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func normalizeOSSEndpoint(ep string) string {
+func normalizeEndpoint(ep string) string {
 	ep = strings.TrimSpace(ep)
 	if ep == "" {
 		return ""

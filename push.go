@@ -116,7 +116,7 @@ func (s *Server) handleUploadPush(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "prefix": prefix + "/"})
 }
 
-// runPush uploads every staged file to OSS under prefix, removing each file
+// runPush uploads every staged file to the bucket under prefix, removing each file
 // from the workspace once it lands. The first failure stops the job and keeps
 // the remaining files staged. job is owned by this goroutine alone (the
 // progressReader callback runs inside store.Put on the same goroutine), so it
@@ -160,9 +160,13 @@ func (s *Server) pushOne(job *jobProgress, localPath, key string) error {
 		return err
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
 	pr := &progressReader{r: f, on: func(n int64) {
 		job.DoneBytes += n
 		s.emitProgress(*job, true)
 	}}
-	return s.store.Put(key, pr)
+	return s.store.Put(key, pr, info.Size())
 }

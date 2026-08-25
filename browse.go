@@ -108,7 +108,7 @@ func entryName(full, prefix string) string {
 }
 
 // pageNextMarker falls back to the last listed object key or common prefix
-// when OSS truncates a page without reporting NextMarker.
+// when the store truncates a page without reporting NextMarker.
 func pageNextMarker(page ListPage) string {
 	if !page.IsTruncated {
 		return ""

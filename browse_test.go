@@ -52,7 +52,7 @@ func (f *fakeStore) SignGetURL(key string, ttl time.Duration) (string, error) {
 	return "https://example.oss-cn-hangzhou.aliyuncs.com/" + url.PathEscape(key) + "?sig=1", nil
 }
 
-func (f *fakeStore) Put(key string, r io.Reader) error {
+func (f *fakeStore) Put(key string, r io.Reader, size int64) error {
 	if f.putHook != nil {
 		f.putHook(key)
 	}
