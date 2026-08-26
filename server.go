@@ -127,20 +127,6 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	// Contents view: a concrete prefix lists its directories and objects.
-	if p := q.Get("prefix"); p != "" {
-		prefix := normalizePrefix(p)
-		page, err := s.store.List(prefix, q.Get("marker"))
-		if err != nil {
-			log.Println("list objects:", err)
-			http.Error(w, "list failed", http.StatusBadGateway)
-			return
-		}
-		data := buildBrowseData(prefix, page)
-		data.Contents = true
-		s.render(w, "home.html", data)
-		return
-	}
 	// Calendar view over the in-memory monthly indexes (loaded at startup,
 	// updated by pushes).
 	now := time.Now()

@@ -102,7 +102,7 @@ func (s *s3Store) List(prefix, marker string) (ListPage, error) {
 		})
 	}
 	// No ContinuationToken plumbing: StartAfter on the last listed key or
-	// common prefix (see pageNextMarker) resumes the listing just as well.
+	// common prefix resumes the listing just as well.
 	return page, nil
 }
 

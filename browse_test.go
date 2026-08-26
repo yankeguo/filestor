@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -344,40 +343,6 @@ func TestBrowseCalendarReadsMemoryIndex(t *testing.T) {
 	require.Contains(t, body, `/browse?month=2026-11&day=2026-11-02#day-2026-11-02`)
 }
 
-func TestBrowsePrefixAndParent(t *testing.T) {
-	store := &fakeStore{page: ListPage{
-		Objects: []ObjectInfo{{Key: "docs/a.txt", Size: 1}},
-	}}
-	h := NewServer(testCfg(), store).Handler()
-	cookie := loginCookie(t, h)
-
-	req := httptest.NewRequest(http.MethodGet, "/browse?prefix=docs", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, "docs/", store.lastListCall()[0])
-	require.Contains(t, rec.Body.String(), `href="/browse"`)
-	require.Contains(t, rec.Body.String(), "a.txt")
-	require.Contains(t, rec.Body.String(), `/download?key=docs%2fa.txt`)
-}
-
-func TestBrowseNextPage(t *testing.T) {
-	store := &fakeStore{page: ListPage{
-		Objects:     []ObjectInfo{{Key: "a.txt", Size: 1}},
-		IsTruncated: true,
-		NextMarker:  "a.txt",
-	}}
-	h := NewServer(testCfg(), store).Handler()
-	cookie := loginCookie(t, h)
-
-	req := httptest.NewRequest(http.MethodGet, "/browse?prefix=docs", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	require.Contains(t, rec.Body.String(), "marker=a.txt")
-}
-
 func TestBundleDetail(t *testing.T) {
 	prefix := bundlePrefix(testBundleID1) + "/"
 	meta := bundleMeta{ID: testBundleID1, Title: "weekly-report", Time: "2026-08-24T06:59"}
@@ -463,25 +428,6 @@ func TestBundleDetailNotFound(t *testing.T) {
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
-}
-
-func TestBrowseBundlePrefixIsContents(t *testing.T) {
-	prefix := bundlePrefix(testBundleID1) + "/"
-	store := &fakeStore{page: ListPage{Objects: []ObjectInfo{
-		{Key: prefix + "notes.pdf", Size: 512},
-	}}}
-	h := NewServer(testCfg(), store).Handler()
-	cookie := loginCookie(t, h)
-	req := httptest.NewRequest(http.MethodGet, "/browse?prefix="+prefix, nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-	body := rec.Body.String()
-	// A bundle prefix in /browse stays the generic contents view; the
-	// dedicated bundle page lives at /bundle/{id}.
-	require.Contains(t, body, "breadcrumb")
-	require.NotContains(t, body, "<h4 class=\"mb-1\">")
 }
 
 func TestParseBundleID(t *testing.T) {
@@ -584,62 +530,10 @@ func TestDownloadRequiresLogin(t *testing.T) {
 	require.Equal(t, "/login", rec.Header().Get("Location"))
 }
 
-func TestBrowseListError(t *testing.T) {
-	h := NewServer(testCfg(), &fakeStore{err: fmt.Errorf("boom")}).Handler()
-	cookie := loginCookie(t, h)
-	req := httptest.NewRequest(http.MethodGet, "/browse?prefix=docs", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusBadGateway, rec.Code)
-}
-
-func TestNormalizePrefixAndParent(t *testing.T) {
-	require.Equal(t, "", normalizePrefix(""))
-	require.Equal(t, "docs/", normalizePrefix("docs"))
-	require.Equal(t, "docs/a/", normalizePrefix("/docs/a/"))
-
-	p, ok := parentPrefix("")
-	require.False(t, ok)
-	require.Equal(t, "", p)
-
-	p, ok = parentPrefix("docs/")
-	require.True(t, ok)
-	require.Equal(t, "", p)
-
-	p, ok = parentPrefix("docs/a/")
-	require.True(t, ok)
-	require.Equal(t, "docs/", p)
-}
-
 func TestFormatSize(t *testing.T) {
 	require.Equal(t, "12 B", formatSize(12))
 	require.Equal(t, "1.0 KB", formatSize(1024))
 	require.Equal(t, "1.5 KB", formatSize(1536))
-}
-
-func TestBuildBrowseDataNextMarker(t *testing.T) {
-	d := buildBrowseData("", ListPage{
-		IsTruncated: true,
-		NextMarker:  "x",
-		Objects:     []ObjectInfo{{Key: "a.txt"}},
-	})
-	require.Equal(t, "x", d.NextMarker)
-
-	d = buildBrowseData("", ListPage{IsTruncated: false, NextMarker: "x"})
-	require.Equal(t, "", d.NextMarker)
-
-	d = buildBrowseData("", ListPage{
-		IsTruncated: true,
-		Objects:     []ObjectInfo{{Key: "a.txt"}, {Key: "b.txt"}},
-	})
-	require.Equal(t, "b.txt", d.NextMarker)
-
-	d = buildBrowseData("", ListPage{
-		IsTruncated: true,
-		Prefixes:    []string{"docs/", "img/"},
-	})
-	require.Equal(t, "img/", d.NextMarker)
 }
 
 func TestAttachmentDisposition(t *testing.T) {

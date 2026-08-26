@@ -7,16 +7,6 @@ import (
 	"time"
 )
 
-type crumb struct {
-	Name   string
-	Prefix string
-}
-
-type dirEntry struct {
-	Name   string
-	Prefix string
-}
-
 type fileEntry struct {
 	Name         string
 	Key          string
@@ -33,17 +23,6 @@ type fileEntry struct {
 type browseData struct {
 	Nav string
 
-	// Contents mode (prefix view).
-	Contents   bool
-	Crumbs     []crumb
-	Parent     string
-	HasParent  bool
-	Dirs       []dirEntry
-	Files      []fileEntry
-	NextMarker string
-	Prefix     string
-
-	// Calendar mode.
 	Month       string
 	MonthLabel  string
 	PrevMonth   string
@@ -82,101 +61,9 @@ type calDayGroup struct {
 	Today    bool
 }
 
-func normalizePrefix(p string) string {
-	p = strings.TrimLeft(p, "/")
-	if p == "" {
-		return ""
-	}
-	if !strings.HasSuffix(p, "/") {
-		p += "/"
-	}
-	return p
-}
-
-func parentPrefix(prefix string) (string, bool) {
-	prefix = strings.TrimSuffix(prefix, "/")
-	if prefix == "" {
-		return "", false
-	}
-	i := strings.LastIndex(prefix, "/")
-	if i < 0 {
-		return "", true
-	}
-	return prefix[:i+1], true
-}
-
-func breadcrumbs(prefix string) []crumb {
-	out := []crumb{{Name: "Home", Prefix: ""}}
-	prefix = strings.Trim(prefix, "/")
-	if prefix == "" {
-		return out
-	}
-	acc := ""
-	for _, part := range strings.Split(prefix, "/") {
-		if part == "" {
-			continue
-		}
-		acc += part + "/"
-		out = append(out, crumb{Name: part, Prefix: acc})
-	}
-	return out
-}
-
 func entryName(full, prefix string) string {
 	name := strings.TrimPrefix(full, prefix)
 	return strings.TrimSuffix(name, "/")
-}
-
-// pageNextMarker falls back to the last listed object key or common prefix
-// when the store truncates a page without reporting NextMarker.
-func pageNextMarker(page ListPage) string {
-	if !page.IsTruncated {
-		return ""
-	}
-	if page.NextMarker != "" {
-		return page.NextMarker
-	}
-	if n := len(page.Objects); n > 0 {
-		return page.Objects[n-1].Key
-	}
-	if n := len(page.Prefixes); n > 0 {
-		return page.Prefixes[n-1]
-	}
-	return ""
-}
-
-func buildBrowseData(prefix string, page ListPage) browseData {
-	prefix = normalizePrefix(prefix)
-	parent, hasParent := parentPrefix(prefix)
-	data := browseData{
-		Nav:        "browse",
-		Crumbs:     breadcrumbs(prefix),
-		Parent:     parent,
-		HasParent:  hasParent,
-		Prefix:     prefix,
-		NextMarker: pageNextMarker(page),
-	}
-	for _, p := range page.Prefixes {
-		name := entryName(p, prefix)
-		if name == "" {
-			continue
-		}
-		data.Dirs = append(data.Dirs, dirEntry{Name: name, Prefix: p})
-	}
-	for _, obj := range page.Objects {
-		name := entryName(obj.Key, prefix)
-		if name == "" {
-			continue
-		}
-		data.Files = append(data.Files, fileEntry{
-			Name:         name,
-			Key:          obj.Key,
-			Size:         formatSize(obj.Size),
-			LastModified: formatTime(obj.LastModified),
-			SizeBytes:    obj.Size,
-		})
-	}
-	return data
 }
 
 const (
