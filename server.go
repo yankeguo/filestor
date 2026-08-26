@@ -13,12 +13,18 @@ const loginFailDelay = time.Second
 type Server struct {
 	Config     *Config
 	store      ObjectStore
+	index      *bundleIndex
 	sessionKey []byte
 	hub        *eventHub
 }
 
 func NewServer(cfg *Config, store ObjectStore) *Server {
-	s := &Server{Config: cfg, store: store, hub: newEventHub()}
+	s := &Server{Config: cfg, store: store, index: newBundleIndex(), hub: newEventHub()}
+	if store != nil {
+		if err := s.index.load(store); err != nil {
+			log.Println("load bundle index:", err)
+		}
+	}
 	if cfg != nil {
 		s.sessionKey = sessionCookieKey(cfg.Admin.Username, cfg.Admin.Password)
 		if err := prepWorkspace(s.workspaceDir()); err != nil {
@@ -133,11 +139,12 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		data.Contents = true
 		// Bundle directories get the dedicated bundle view instead of the
 		// generic contents table.
-		decorateBundle(&data, s.store)
+		s.decorateBundle(&data)
 		s.render(w, "home.html", data)
 		return
 	}
-	// Calendar view over monthly indexes (index/YYYY/YYYY-MM.json).
+	// Calendar view over the in-memory monthly indexes (loaded at startup,
+	// updated by pushes).
 	now := time.Now()
 	var day time.Time
 	if d := q.Get("day"); d != "" {
@@ -166,13 +173,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	} else if !day.IsZero() && (day.Year() != month.Year() || day.Month() != month.Month()) {
 		day = time.Time{}
 	}
-	bundles, err := listYearBundles(s.store, month.Year())
-	if err != nil {
-		log.Println("list objects:", err)
-		http.Error(w, "list failed", http.StatusBadGateway)
-		return
-	}
-	s.render(w, "home.html", buildBrowseCalendar(month, day, bundles, now))
+	s.render(w, "home.html", buildBrowseCalendar(month, day, s.index.year(month.Year()), now))
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {

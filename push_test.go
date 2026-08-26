@@ -138,6 +138,13 @@ func TestUploadPushSuccess(t *testing.T) {
 	require.NoError(t, json.Unmarshal(idx, &listed))
 	require.Equal(t, []bundleMeta{meta}, listed)
 
+	// The in-memory index is updated too, so the calendar sees the bundle
+	// without another bucket read.
+	got, ok := srv.index.get(id)
+	require.True(t, ok)
+	require.Equal(t, meta, got)
+	require.Equal(t, []bundleMeta{meta}, srv.index.year(2026))
+
 	// Uploaded files are removed from the staging workspace (the .filestor
 	// meta directory stays behind).
 	files, err := listWorkspaceFiles(cfg.Upload.Workspace)
@@ -291,6 +298,8 @@ func TestUploadPushFileFailureSkipsIndex(t *testing.T) {
 	for _, k := range keys {
 		require.False(t, strings.HasPrefix(k, "index/"), k)
 	}
+	// The in-memory index stays untouched too.
+	require.Empty(t, srv.index.year(2026))
 
 	_, err := os.Stat(filepath.Join(cfg.Upload.Workspace, "a.txt"))
 	require.NoError(t, err)

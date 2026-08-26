@@ -42,6 +42,9 @@ type ListPage struct {
 
 type ObjectStore interface {
 	List(prefix, marker string) (ListPage, error)
+	// ListKeys returns every object key under prefix (no delimiter), paging
+	// internally; used at startup to enumerate the monthly index files.
+	ListKeys(prefix string) ([]string, error)
 	Get(key string) ([]byte, error)
 	SignGetURL(key string, ttl time.Duration) (string, error)
 	SignPreviewURL(key string, ttl time.Duration) (string, error)
@@ -127,6 +130,32 @@ func (s *s3Store) Get(key string) ([]byte, error) {
 		return nil, fmt.Errorf("object too large")
 	}
 	return data, nil
+}
+
+func (s *s3Store) ListKeys(prefix string) ([]string, error) {
+	var keys []string
+	marker := ""
+	for {
+		in := &s3.ListObjectsV2Input{
+			Bucket:  aws.String(s.bucket),
+			Prefix:  aws.String(prefix),
+			MaxKeys: aws.Int32(1000),
+		}
+		if marker != "" {
+			in.StartAfter = aws.String(marker)
+		}
+		out, err := s.client.ListObjectsV2(context.Background(), in)
+		if err != nil {
+			return nil, err
+		}
+		for _, obj := range out.Contents {
+			keys = append(keys, aws.ToString(obj.Key))
+		}
+		if !aws.ToBool(out.IsTruncated) || len(out.Contents) == 0 {
+			return keys, nil
+		}
+		marker = aws.ToString(out.Contents[len(out.Contents)-1].Key)
+	}
 }
 
 func isS3NotFound(err error) bool {

@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -193,18 +192,26 @@ func buildBrowseData(prefix string, page ListPage) browseData {
 }
 
 // decorateBundle upgrades a contents listing of a bundle directory into the
-// dedicated bundle view: header from .meta.json, file stats, type icons and
-// signed inline-preview URLs for browser-native media. It is a no-op when
-// the prefix is not a content/<aa>/<bb>/<uuid>/ bundle or .meta.json cannot
-// be read.
-func decorateBundle(data *browseData, store ObjectStore) {
+// dedicated bundle view: header from the in-memory index (falling back to the
+// bucket's .meta.json), file stats, type icons and signed inline-preview URLs
+// for browser-native media. It is a no-op when the prefix is not a
+// content/<aa>/<bb>/<uuid>/ bundle or no meta can be found.
+func (s *Server) decorateBundle(data *browseData) {
 	id, ok := parseBundleID(data.Prefix)
-	if !ok || store == nil {
+	if !ok {
 		return
 	}
-	meta, err := loadBundleMeta(store, id)
-	if err != nil {
-		return
+	meta, ok := s.index.get(id)
+	if !ok {
+		if s.store == nil {
+			return
+		}
+		// Not in the index (e.g. the bucket was written by another tool):
+		// fall back to the bundle's own .meta.json.
+		var err error
+		if meta, err = loadBundleMeta(s.store, id); err != nil {
+			return
+		}
 	}
 	when, err := time.Parse(pushTimeLayout, meta.Time)
 	if err != nil {
@@ -235,7 +242,7 @@ func decorateBundle(data *browseData, store ObjectStore) {
 		if kind == "" {
 			continue
 		}
-		u, err := store.SignPreviewURL(f.Key, signURLTTL)
+		u, err := s.store.SignPreviewURL(f.Key, signURLTTL)
 		if err != nil {
 			log.Println("sign preview:", err)
 			continue
@@ -256,33 +263,6 @@ const (
 	browseMonthLayout = "2006-01"
 	browseDayLayout   = "2006-01-02"
 )
-
-// listYearBundles returns every bundle listed in the year's monthly indexes.
-// Months are fetched concurrently; a missing index file is an empty month.
-// The first month error wins.
-func listYearBundles(store ObjectStore, year int) ([]bundleMeta, error) {
-	perMonth := make([][]bundleMeta, 12)
-	errs := make([]error, 12)
-	var wg sync.WaitGroup
-	for m := 1; m <= 12; m++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			list, err := loadMonthIndex(store, year, time.Month(m))
-			perMonth[m-1] = list
-			errs[m-1] = err
-		}()
-	}
-	wg.Wait()
-	var out []bundleMeta
-	for m := 0; m < 12; m++ {
-		if errs[m] != nil {
-			return nil, errs[m]
-		}
-		out = append(out, perMonth[m]...)
-	}
-	return out, nil
-}
 
 // buildBrowseCalendar renders the calendar for one month plus the year list
 // of bundle day groups (newest first). yearBundles holds every bundle of the

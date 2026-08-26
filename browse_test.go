@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -51,6 +53,22 @@ func (f *fakeStore) List(prefix, marker string) (ListPage, error) {
 	return f.page, f.err
 }
 
+func (f *fakeStore) ListKeys(prefix string) ([]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.putsMu.Lock()
+	defer f.putsMu.Unlock()
+	var keys []string
+	for k := range f.objects {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	return keys, nil
+}
+
 func (f *fakeStore) Get(key string) ([]byte, error) {
 	if f.getFn != nil {
 		return f.getFn(key)
@@ -68,9 +86,8 @@ func (f *fakeStore) Get(key string) ([]byte, error) {
 	return nil, errNotFound
 }
 
-// lastListCall returns the most recent List call (which month finished last
-// is nondeterministic for the year fan-out, so calendar tests must not rely
-// on it).
+// lastListCall returns the most recent List call (only meaningful for tests
+// that trigger exactly one List).
 func (f *fakeStore) lastListCall() [2]string {
 	f.listMu.Lock()
 	defer f.listMu.Unlock()
@@ -296,7 +313,9 @@ func TestBuildBrowseCalendarSelectedMissing(t *testing.T) {
 	require.True(t, d.SelectedMissing)
 }
 
-func TestListYearBundles(t *testing.T) {
+func TestBrowseCalendarReadsMemoryIndex(t *testing.T) {
+	// The calendar is served from the in-memory index loaded at startup, so
+	// it must not List or Get anything per request.
 	store := &fakeStore{objects: map[string][]byte{
 		"index/2026/2026-03.json": mustIndexJSON(t,
 			bundleMeta{ID: testBundleID4, Title: "a", Time: "2026-03-01T12:00"},
@@ -306,18 +325,23 @@ func TestListYearBundles(t *testing.T) {
 			bundleMeta{ID: testBundleID6, Title: "c", Time: "2026-11-03T01:00"},
 		),
 	}}
-	got, err := listYearBundles(store, 2026)
-	require.NoError(t, err)
-	require.Equal(t, []bundleMeta{
-		{ID: testBundleID4, Title: "a", Time: "2026-03-01T12:00"},
-		{ID: testBundleID5, Title: "b", Time: "2026-11-02T23:59"},
-		{ID: testBundleID6, Title: "c", Time: "2026-11-03T01:00"},
-	}, got)
-
+	h := NewServer(testCfg(), store).Handler()
+	cookie := loginCookie(t, h)
 	store.err = errors.New("boom")
-	store.objects = nil
-	_, err = listYearBundles(store, 2026)
-	require.Error(t, err)
+	store.getFn = func(string) ([]byte, error) { return nil, errors.New("boom") }
+
+	req := httptest.NewRequest(http.MethodGet, "/browse?month=2026-11", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	// All three indexed days of the year are listed from memory.
+	require.Contains(t, body, `id="day-2026-03-01"`)
+	require.Contains(t, body, `id="day-2026-11-02"`)
+	require.Contains(t, body, `id="day-2026-11-03"`)
+	// The displayed month's own days are highlighted in the calendar grid.
+	require.Contains(t, body, `/browse?month=2026-11&day=2026-11-02#day-2026-11-02`)
 }
 
 func TestBrowsePrefixAndParent(t *testing.T) {
@@ -539,7 +563,7 @@ func TestDownloadRequiresLogin(t *testing.T) {
 func TestBrowseListError(t *testing.T) {
 	h := NewServer(testCfg(), &fakeStore{err: fmt.Errorf("boom")}).Handler()
 	cookie := loginCookie(t, h)
-	req := httptest.NewRequest(http.MethodGet, "/browse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/browse?prefix=docs", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

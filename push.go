@@ -129,7 +129,8 @@ func (s *Server) handleUploadPush(w http.ResponseWriter, r *http.Request) {
 
 // runPush uploads .meta.json then every staged file to the bucket under prefix,
 // removing each staged file from the workspace once it lands. After all files
-// succeed it appends the bundle to the monthly index. The first failure stops
+// succeed it records the bundle in the monthly index (rewriting the bucket
+// file and updating the in-memory copy). The first failure stops
 // the job and keeps the remaining files staged. job is owned by this goroutine
 // alone (the progressReader callback runs inside store.Put on the same
 // goroutine), so it needs no locking.
@@ -171,7 +172,7 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 		s.emitProgress(job, false)
 		s.emitFiles()
 	}
-	if err := appendMonthIndex(s.store, meta); err != nil {
+	if err := s.index.append(s.store, meta); err != nil {
 		log.Println("push index:", err)
 		job.Error = fmt.Sprintf("index: %v", err)
 		s.emitFail(job)
