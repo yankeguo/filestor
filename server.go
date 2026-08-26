@@ -42,6 +42,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /{$}", s.handleRoot)
 	mux.Handle("GET /browse", s.requireAuth(http.HandlerFunc(s.handleBrowse)))
+	mux.Handle("GET /bundle/{id}", s.requireAuth(http.HandlerFunc(s.handleBundle)))
 	mux.Handle("GET /download", s.requireAuth(http.HandlerFunc(s.handleDownload)))
 	mux.Handle("GET /preview", s.requireAuth(http.HandlerFunc(s.handlePreview)))
 	mux.Handle("GET /static/", s.requireAuth(staticHandler()))
@@ -137,9 +138,6 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		}
 		data := buildBrowseData(prefix, page)
 		data.Contents = true
-		// Bundle directories get the dedicated bundle view instead of the
-		// generic contents table.
-		s.decorateBundle(&data)
 		s.render(w, "home.html", data)
 		return
 	}

@@ -217,7 +217,7 @@ func TestBrowseCalendarHighlightsAndListsDay(t *testing.T) {
 	require.Contains(t, body, "weekly-report")
 	require.Contains(t, body, "12:00")
 	require.Contains(t, body, "monthly-billing")
-	require.Contains(t, body, `/browse?prefix=content%2f55%2f0e%2f550e8400-e29b-41d4-a716-446655440000%2f`)
+	require.Contains(t, body, `/bundle/550e8400-e29b-41d4-a716-446655440000`)
 	// Other days of the year appear too (not only the selected one).
 	require.Contains(t, body, "10:15")
 	require.Contains(t, body, "发票")
@@ -296,8 +296,8 @@ func TestBuildBrowseCalendarGrid(t *testing.T) {
 	// The year list groups every day of the year, newest first; the selected
 	// (also today) group is flagged.
 	require.Equal(t, []calDayGroup{
-		{Date: "2026-08-24", Bundles: []calDir{{Time: "06:59", Title: "x", Prefix: bundlePrefix(testBundleID1) + "/"}}, Selected: true, Today: true},
-		{Date: "2026-07-10", Bundles: []calDir{{Time: "12:00", Title: "y", Prefix: bundlePrefix(testBundleID4) + "/"}}},
+		{Date: "2026-08-24", Bundles: []calDir{{Time: "06:59", Title: "x", ID: testBundleID1}}, Selected: true, Today: true},
+		{Date: "2026-07-10", Bundles: []calDir{{Time: "12:00", Title: "y", ID: testBundleID4}}},
 	}, d.DayGroups)
 	require.False(t, d.SelectedMissing)
 }
@@ -378,7 +378,7 @@ func TestBrowseNextPage(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "marker=a.txt")
 }
 
-func TestBrowseBundleView(t *testing.T) {
+func TestBundleDetail(t *testing.T) {
 	prefix := bundlePrefix(testBundleID1) + "/"
 	meta := bundleMeta{ID: testBundleID1, Title: "weekly-report", Time: "2026-08-24T06:59"}
 	store := &fakeStore{
@@ -394,7 +394,7 @@ func TestBrowseBundleView(t *testing.T) {
 	h := NewServer(testCfg(), store).Handler()
 	cookie := loginCookie(t, h)
 
-	req := httptest.NewRequest(http.MethodGet, "/browse?prefix="+prefix, nil)
+	req := httptest.NewRequest(http.MethodGet, "/bundle/"+testBundleID1, nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -421,7 +421,7 @@ func TestBrowseBundleView(t *testing.T) {
 	require.NotContains(t, body, "breadcrumb")
 }
 
-func TestBrowseBundleViewSkipsOversizedImagePreview(t *testing.T) {
+func TestBundleDetailSkipsOversizedImagePreview(t *testing.T) {
 	prefix := bundlePrefix(testBundleID1) + "/"
 	meta := bundleMeta{ID: testBundleID1, Title: "x", Time: "2026-08-24T06:59"}
 	store := &fakeStore{
@@ -433,7 +433,7 @@ func TestBrowseBundleViewSkipsOversizedImagePreview(t *testing.T) {
 	h := NewServer(testCfg(), store).Handler()
 	cookie := loginCookie(t, h)
 
-	req := httptest.NewRequest(http.MethodGet, "/browse?prefix="+prefix, nil)
+	req := httptest.NewRequest(http.MethodGet, "/bundle/"+testBundleID1, nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -443,7 +443,29 @@ func TestBrowseBundleViewSkipsOversizedImagePreview(t *testing.T) {
 	require.Contains(t, body, "bi-file-earmark-image")
 }
 
-func TestBrowseBundleViewWithoutMetaIsContents(t *testing.T) {
+func TestBundleDetailNotFound(t *testing.T) {
+	store := &fakeStore{page: ListPage{Objects: []ObjectInfo{
+		{Key: bundlePrefix(testBundleID1) + "/notes.pdf", Size: 512},
+	}}}
+	h := NewServer(testCfg(), store).Handler()
+	cookie := loginCookie(t, h)
+
+	// Unknown id: not in the in-memory index, no .meta.json in the bucket.
+	req := httptest.NewRequest(http.MethodGet, "/bundle/"+testBundleID1, nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+
+	// Invalid id: not a UUID v4.
+	req = httptest.NewRequest(http.MethodGet, "/bundle/not-a-uuid", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestBrowseBundlePrefixIsContents(t *testing.T) {
 	prefix := bundlePrefix(testBundleID1) + "/"
 	store := &fakeStore{page: ListPage{Objects: []ObjectInfo{
 		{Key: prefix + "notes.pdf", Size: 512},
@@ -456,6 +478,8 @@ func TestBrowseBundleViewWithoutMetaIsContents(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
+	// A bundle prefix in /browse stays the generic contents view; the
+	// dedicated bundle page lives at /bundle/{id}.
 	require.Contains(t, body, "breadcrumb")
 	require.NotContains(t, body, "<h4 class=\"mb-1\">")
 }

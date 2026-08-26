@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,7 +23,7 @@ type fileEntry struct {
 	Size         string
 	LastModified string
 	SizeBytes    int64
-	// Bundle view extras: type icon, inline-preview kind ("image"/"video"/
+	// Bundle detail extras: type icon, inline-preview kind ("image"/"video"/
 	// "audio") and the signed preview URL (empty when preview is unavailable).
 	Icon       string
 	Kind       string
@@ -43,17 +42,6 @@ type browseData struct {
 	Files      []fileEntry
 	NextMarker string
 	Prefix     string
-
-	// Bundle mode (dedicated view for a bundle directory).
-	Bundle    bool
-	Title     string
-	Date      string // YYYY-MM-DD
-	TimeHM    string // hh:mm
-	BackMonth string // YYYY-MM
-	FileCount int
-	TotalSize string
-	HasImages bool
-	HasMedia  bool
 
 	// Calendar mode.
 	Month       string
@@ -80,9 +68,9 @@ type calDay struct {
 
 // calDir is one bundle listed for a day.
 type calDir struct {
-	Time   string
-	Title  string
-	Prefix string
+	Time  string
+	Title string
+	ID    string
 }
 
 // calDayGroup is one day of the year list: all bundles under one YYYYMMDD
@@ -191,74 +179,6 @@ func buildBrowseData(prefix string, page ListPage) browseData {
 	return data
 }
 
-// decorateBundle upgrades a contents listing of a bundle directory into the
-// dedicated bundle view: header from the in-memory index (falling back to the
-// bucket's .meta.json), file stats, type icons and signed inline-preview URLs
-// for browser-native media. It is a no-op when the prefix is not a
-// content/<aa>/<bb>/<uuid>/ bundle or no meta can be found.
-func (s *Server) decorateBundle(data *browseData) {
-	id, ok := parseBundleID(data.Prefix)
-	if !ok {
-		return
-	}
-	meta, ok := s.index.get(id)
-	if !ok {
-		if s.store == nil {
-			return
-		}
-		// Not in the index (e.g. the bucket was written by another tool):
-		// fall back to the bundle's own .meta.json.
-		var err error
-		if meta, err = loadBundleMeta(s.store, id); err != nil {
-			return
-		}
-	}
-	when, err := time.Parse(pushTimeLayout, meta.Time)
-	if err != nil {
-		return
-	}
-	data.Bundle = true
-	data.Date = when.Format(browseDayLayout)
-	data.TimeHM = when.Format("15:04")
-	data.Title = meta.Title
-	data.BackMonth = when.Format(browseMonthLayout)
-	files := make([]fileEntry, 0, len(data.Files))
-	for _, f := range data.Files {
-		if f.Name == bundleMetaName {
-			continue
-		}
-		files = append(files, f)
-	}
-	data.Files = files
-	var total int64
-	for i := range data.Files {
-		f := &data.Files[i]
-		f.Icon = fileIcon(f.Name)
-		total += f.SizeBytes
-		kind := previewKind(f.Name)
-		if kind == "image" && f.SizeBytes > imagePreviewMaxSize {
-			kind = ""
-		}
-		if kind == "" {
-			continue
-		}
-		u, err := s.store.SignPreviewURL(f.Key, signURLTTL)
-		if err != nil {
-			log.Println("sign preview:", err)
-			continue
-		}
-		f.Kind = kind
-		f.PreviewURL = u
-		if kind == "image" {
-			data.HasImages = true
-		} else {
-			data.HasMedia = true
-		}
-	}
-	data.FileCount = len(data.Files)
-	data.TotalSize = formatSize(total)
-}
-
 const (
 	browseMonthLayout = "2006-01"
 	browseDayLayout   = "2006-01-02"
@@ -306,9 +226,9 @@ func buildBrowseCalendar(month time.Time, selected time.Time, yearBundles []bund
 			ordered = append(ordered, g)
 		}
 		g.Bundles = append(g.Bundles, calDir{
-			Time:   when.Format("15:04"),
-			Title:  b.Title,
-			Prefix: bundlePrefix(strings.ToLower(b.ID)) + "/",
+			Time:  when.Format("15:04"),
+			Title: b.Title,
+			ID:    strings.ToLower(b.ID),
 		})
 	}
 	data := browseData{
