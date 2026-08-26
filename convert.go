@@ -3,11 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +19,6 @@ const (
 	// convertTimeoutLong per file (multi-page rendering is slower).
 	convertTimeout     = 45 * time.Second
 	convertTimeoutLong = 120 * time.Second
-	convertCacheTTL    = 7 * 24 * time.Hour
 
 	// convertTextMaxBytes caps a converted full-text form on disk.
 	convertTextMaxBytes = 4 << 20
@@ -506,179 +502,4 @@ func convertFileToFrameImages(ctx context.Context, src string) ([][]byte, error)
 		return nil, errors.New("no frames extracted")
 	}
 	return out, nil
-}
-
-// hashFileSHA256 returns the hex content hash used as the conversion cache key.
-func hashFileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// convertCacheGetPath returns the cached file for a key+suffix (e.g.
-// "<sha256>.txt"). Entries older than convertCacheTTL or empty count as a
-// miss (left in place for pruneConvertCache to remove).
-func convertCacheGetPath(dir, name string) (string, bool) {
-	p := filepath.Join(workspaceCachePath(dir), name)
-	info, err := os.Stat(p)
-	if err != nil || info.Size() == 0 || time.Since(info.ModTime()) > convertCacheTTL {
-		return "", false
-	}
-	return p, true
-}
-
-// convertCacheList enumerates a multi-file cached conversion (pages, frames)
-// by glob. Any missing, empty, or expired piece makes the whole set a miss.
-func convertCacheList(dir, key, globSuffix string) ([]string, bool) {
-	paths, err := filepath.Glob(filepath.Join(workspaceCachePath(dir), key+globSuffix))
-	if err != nil || len(paths) == 0 {
-		return nil, false
-	}
-	out := make([]string, 0, len(paths))
-	for _, p := range paths {
-		info, err := os.Stat(p)
-		if err != nil || info.Size() == 0 || time.Since(info.ModTime()) > convertCacheTTL {
-			return nil, false
-		}
-		out = append(out, p)
-	}
-	return out, true
-}
-
-// convertCachePut stores a conversion result atomically and prunes expired
-// entries on the way out (best-effort).
-func convertCachePut(dir, key, suffix string, data []byte) {
-	if len(data) == 0 {
-		return
-	}
-	if err := os.MkdirAll(workspaceCachePath(dir), 0o755); err != nil {
-		return
-	}
-	tmp, err := os.CreateTemp(workspaceCachePath(dir), "tmp-*")
-	if err != nil {
-		return
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return
-	}
-	if err := tmp.Close(); err != nil {
-		return
-	}
-	if err := os.Rename(tmpName, filepath.Join(workspaceCachePath(dir), key+suffix)); err != nil {
-		return
-	}
-	pruneConvertCache(dir)
-}
-
-// pruneConvertCache removes cache entries older than convertCacheTTL.
-func pruneConvertCache(dir string) {
-	entries, err := os.ReadDir(workspaceCachePath(dir))
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-convertCacheTTL)
-	for _, e := range entries {
-		info, err := e.Info()
-		if err != nil || !info.Mode().IsRegular() || !info.ModTime().Before(cutoff) {
-			continue
-		}
-		_ = os.Remove(filepath.Join(workspaceCachePath(dir), e.Name()))
-	}
-}
-
-// convertToTextFile converts src to its full text form, memoized under the
-// workspace's .filestor/cache as <sha256>.txt keyed by the source content
-// hash, and returns the cache file path. Empty conversions are not cached
-// and report an error (no readable text).
-func convertToTextFile(ctx context.Context, dir, src string) (string, error) {
-	key, err := hashFileSHA256(src)
-	if err != nil {
-		return "", err
-	}
-	if p, ok := convertCacheGetPath(dir, key+".txt"); ok {
-		return p, nil
-	}
-	text, err := convertFileToFullText(ctx, src)
-	if err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(text) == "" {
-		return "", errors.New("no readable text")
-	}
-	convertCachePut(dir, key, ".txt", []byte(text))
-	return filepath.Join(workspaceCachePath(dir), key+".txt"), nil
-}
-
-// convertToImageFile normalizes src to a single jpeg, cached as
-// <sha256>.jpg, and returns the cache file path.
-func convertToImageFile(ctx context.Context, dir, src string) (string, error) {
-	key, err := hashFileSHA256(src)
-	if err != nil {
-		return "", err
-	}
-	if p, ok := convertCacheGetPath(dir, key+".jpg"); ok {
-		return p, nil
-	}
-	data, err := convertFileToLLMImage(ctx, src)
-	if err != nil {
-		return "", err
-	}
-	convertCachePut(dir, key, ".jpg", data)
-	return filepath.Join(workspaceCachePath(dir), key+".jpg"), nil
-}
-
-// convertToPageFiles renders the document pages of src, cached as
-// <sha256>.p01.jpg… and enumerated by glob, and returns the cache paths.
-func convertToPageFiles(ctx context.Context, dir, src string) ([]string, error) {
-	key, err := hashFileSHA256(src)
-	if err != nil {
-		return nil, err
-	}
-	if pages, ok := convertCacheList(dir, key, ".p*.jpg"); ok {
-		return pages, nil
-	}
-	blobs, err := convertFileToPageImages(ctx, src)
-	if err != nil {
-		return nil, err
-	}
-	paths := make([]string, 0, len(blobs))
-	for i, data := range blobs {
-		suffix := fmt.Sprintf(".p%02d.jpg", i+1)
-		convertCachePut(dir, key, suffix, data)
-		paths = append(paths, filepath.Join(workspaceCachePath(dir), key+suffix))
-	}
-	return paths, nil
-}
-
-// convertToFrameFiles extracts the video frames of src, cached as
-// <sha256>.f1.jpg… and enumerated by glob, and returns the cache paths.
-func convertToFrameFiles(ctx context.Context, dir, src string) ([]string, error) {
-	key, err := hashFileSHA256(src)
-	if err != nil {
-		return nil, err
-	}
-	if frames, ok := convertCacheList(dir, key, ".f*.jpg"); ok {
-		return frames, nil
-	}
-	blobs, err := convertFileToFrameImages(ctx, src)
-	if err != nil {
-		return nil, err
-	}
-	paths := make([]string, 0, len(blobs))
-	for i, data := range blobs {
-		suffix := fmt.Sprintf(".f%d.jpg", i+1)
-		convertCachePut(dir, key, suffix, data)
-		paths = append(paths, filepath.Join(workspaceCachePath(dir), key+suffix))
-	}
-	return paths, nil
 }

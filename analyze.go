@@ -503,14 +503,6 @@ func countTextLines(data []byte) int {
 	return n
 }
 
-func countFileLines(path string) int {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0
-	}
-	return countTextLines(data)
-}
-
 // textFileStats returns the line count of a staged text file's readable
 // prefix and whether the file exceeds readFileMaxBytes.
 func textFileStats(dir, name string) (lines int, truncated bool) {
@@ -530,20 +522,10 @@ func textFileStats(dir, name string) (lines int, truncated bool) {
 	return countTextLines(data), truncated
 }
 
-// linkDerived places one conversion product under .filestor/analyze as a hard
-// link to the cache file, falling back to a copy where links are unsupported.
-func linkDerived(analyzeDir, srcPath, name string) bool {
-	dst := filepath.Join(analyzeDir, name)
-	if err := os.Link(srcPath, dst); err == nil {
-		return true
-	}
-	data, err := os.ReadFile(srcPath)
-	if err != nil {
-		log.Println("link analyze product:", err)
-		return false
-	}
-	if err := os.WriteFile(dst, data, 0o644); err != nil {
-		log.Println("link analyze product:", err)
+// writeDerived places one conversion product under .filestor/analyze.
+func writeDerived(analyzeDir, name string, data []byte) bool {
+	if err := os.WriteFile(filepath.Join(analyzeDir, name), data, 0o644); err != nil {
+		log.Println("write analyze product:", err)
 		return false
 	}
 	return true
@@ -555,11 +537,16 @@ func linkDerived(analyzeDir, srcPath, name string) bool {
 func prepEntry(ctx context.Context, dir, analyzeDir string, f workspaceFile) *analyzeEntry {
 	e := &analyzeEntry{Name: f.Name, Size: f.Size, Kind: classifyStagedFile(dir, f.Name)}
 	src := filepath.Join(dir, f.Name)
-	linkText := func(p string) {
+	writeText := func(text string) {
+		// Whitespace-only text means no readable text was found (e.g. a
+		// scanned, all-image document): no text form is written.
+		if strings.TrimSpace(text) == "" {
+			return
+		}
 		name := f.Name + ".txt"
-		if linkDerived(analyzeDir, p, name) {
+		if writeDerived(analyzeDir, name, []byte(text)) {
 			e.Text = name
-			e.TextLines = countFileLines(p)
+			e.TextLines = countTextLines([]byte(text))
 		}
 	}
 	switch e.Kind {
@@ -569,13 +556,13 @@ func prepEntry(ctx context.Context, dir, analyzeDir string, f workspaceFile) *an
 	case kindDocument:
 		ctx, cancel := withConvertTimeout(ctx, convertTimeoutLong)
 		defer cancel()
-		if p, err := convertToTextFile(ctx, dir, src); err == nil {
-			linkText(p)
+		if text, err := convertFileToFullText(ctx, src); err == nil {
+			writeText(text)
 		}
-		if pages, err := convertToPageFiles(ctx, dir, src); err == nil {
-			for i, p := range pages {
+		if pages, err := convertFileToPageImages(ctx, src); err == nil {
+			for i, data := range pages {
 				name := fmt.Sprintf("%s.p%02d.jpg", f.Name, i+1)
-				if linkDerived(analyzeDir, p, name) {
+				if writeDerived(analyzeDir, name, data) {
 					e.Pages = append(e.Pages, name)
 				}
 			}
@@ -587,9 +574,9 @@ func prepEntry(ctx context.Context, dir, analyzeDir string, f workspaceFile) *an
 		}
 		ctx, cancel := withConvertTimeout(ctx, convertTimeout)
 		defer cancel()
-		if p, err := convertToImageFile(ctx, dir, src); err == nil {
+		if data, err := convertFileToLLMImage(ctx, src); err == nil {
 			name := f.Name + ".jpg"
-			if linkDerived(analyzeDir, p, name) {
+			if writeDerived(analyzeDir, name, data) {
 				e.Image = name
 			}
 		}
@@ -597,10 +584,10 @@ func prepEntry(ctx context.Context, dir, analyzeDir string, f workspaceFile) *an
 	case kindVideo:
 		ctx, cancel := withConvertTimeout(ctx, convertTimeoutLong)
 		defer cancel()
-		if frames, err := convertToFrameFiles(ctx, dir, src); err == nil {
-			for i, p := range frames {
+		if frames, err := convertFileToFrameImages(ctx, src); err == nil {
+			for i, data := range frames {
 				name := fmt.Sprintf("%s.f%d.jpg", f.Name, i+1)
-				if linkDerived(analyzeDir, p, name) {
+				if writeDerived(analyzeDir, name, data) {
 					e.Frames = append(e.Frames, name)
 				}
 			}
@@ -612,8 +599,8 @@ func prepEntry(ctx context.Context, dir, analyzeDir string, f workspaceFile) *an
 		if info, err := os.Stat(src); err == nil && info.Size() <= otherConvertMaxBytes {
 			ctx, cancel := withConvertTimeout(ctx, convertTimeoutLong)
 			defer cancel()
-			if p, err := convertToTextFile(ctx, dir, src); err == nil {
-				linkText(p)
+			if text, err := convertFileToFullText(ctx, src); err == nil {
+				writeText(text)
 			}
 		}
 	}

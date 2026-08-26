@@ -22,13 +22,12 @@ const (
 	uploadNameQuery  = "name"
 
 	// workspaceMetaDir collects every non-staged file (draft state, atomic
-	// write temp files, conversion cache, analyze products, digest marks)
-	// under one dot-prefixed directory, so the workspace root only ever
-	// holds staged files.
+	// write temp files, analyze products, digest marks) under one
+	// dot-prefixed directory, so the workspace root only ever holds staged
+	// files.
 	workspaceMetaDir   = ".filestor"
 	workspaceStateFile = "state.json"
 	workspaceTmpDir    = "tmp"
-	workspaceCacheDir  = "cache"
 	workspaceAnalyze   = "analyze"
 	workspaceDigest    = "digest"
 )
@@ -77,12 +76,8 @@ func workspaceTmpPath(dir string) string {
 	return filepath.Join(dir, workspaceMetaDir, workspaceTmpDir)
 }
 
-func workspaceCachePath(dir string) string {
-	return filepath.Join(dir, workspaceMetaDir, workspaceCacheDir)
-}
-
 // workspaceAnalyzePath is the per-run directory of derived, model-readable
-// forms (hard links into the conversion cache), rebuilt by every analyze run.
+// forms, rebuilt by every analyze run.
 func workspaceAnalyzePath(dir string) string {
 	return filepath.Join(dir, workspaceMetaDir, workspaceAnalyze)
 }
@@ -95,13 +90,9 @@ func workspaceDigestPath(dir string) string {
 }
 
 // prepWorkspace creates the .filestor meta directory and removes stale temp
-// files from interrupted writes, expired conversion cache entries, and the
-// previous run's analyze products.
+// files from interrupted writes and the previous run's analyze products.
 func prepWorkspace(dir string) error {
 	if err := os.MkdirAll(workspaceTmpPath(dir), 0o755); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(workspaceCachePath(dir), 0o755); err != nil {
 		return err
 	}
 	if entries, err := os.ReadDir(workspaceTmpPath(dir)); err == nil {
@@ -109,11 +100,7 @@ func prepWorkspace(dir string) error {
 			_ = os.RemoveAll(filepath.Join(workspaceTmpPath(dir), e.Name()))
 		}
 	}
-	if err := resetAnalyzeDir(dir); err != nil {
-		return err
-	}
-	pruneConvertCache(dir)
-	return nil
+	return resetAnalyzeDir(dir)
 }
 
 // resetAnalyzeDir clears and recreates the analyze products directory.

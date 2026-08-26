@@ -720,26 +720,53 @@ func TestPrepAnalyzeDocument(t *testing.T) {
 	require.Equal(t, 2, e.TextLines)
 	require.Equal(t, []string{"report.docx.p01.jpg", "report.docx.p02.jpg"}, e.Pages)
 
-	// The products are linked into .filestor/analyze under the derived names.
+	// The products are written into .filestor/analyze under the derived names.
 	text, err := os.ReadFile(filepath.Join(workspaceAnalyzePath(dir), "report.docx.txt"))
 	require.NoError(t, err)
 	require.Equal(t, "line one\nline two\n", string(text))
 	_, err = os.Stat(filepath.Join(workspaceAnalyzePath(dir), "report.docx.p01.jpg"))
 	require.NoError(t, err)
-
 	listing := buildAnalyzeListing(entries)
 	require.Contains(t, listing, "- `report.docx` (10 B, document)\n")
 	require.Contains(t, listing, "  text: `report.docx.txt` (2 lines)\n")
 	require.Contains(t, listing, "  pages: `report.docx.p01.jpg` `report.docx.p02.jpg`\n")
+}
 
-	// A rerun rebuilds .filestor/analyze from the cache without converters.
-	stubConvert(t, noBins, func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		t.Fatal("runCmd should not be called on a cache hit")
+func TestPrepAnalyzeScannedDocument(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "scan.pdf"), []byte("%PDF-1.7 fake"), 0o644))
+
+	// A scanned PDF yields whitespace-only text but renders page images.
+	stubConvert(t, func(name string) (string, error) {
+		switch name {
+		case "pdftotext", "pdftoppm":
+			return "/usr/bin/" + name, nil
+		}
+		return "", errConvertUnavailable
+	}, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch {
+		case strings.Contains(name, "pdftotext"):
+			return []byte("  \n "), nil
+		case strings.Contains(name, "pdftoppm"):
+			fakePdftoppm(t, args, 2)
+			return nil, nil
+		}
+		t.Fatalf("unexpected command %s", name)
 		return nil, nil
 	})
-	entries = prepAnalyze(context.Background(), dir, files, nil)
-	require.Equal(t, "report.docx.txt", entries[0].Text)
-	require.Len(t, entries[0].Pages, 2)
+
+	files, err := listWorkspaceFiles(dir)
+	require.NoError(t, err)
+	entries := prepAnalyze(context.Background(), dir, files, nil)
+	require.Len(t, entries, 1)
+	e := entries[0]
+	// Whitespace-only text is not a text form; the pages carry the content.
+	require.Empty(t, e.Text)
+	require.Equal(t, []string{"scan.pdf.p01.jpg", "scan.pdf.p02.jpg"}, e.Pages)
+	require.False(t, e.Failed)
+	_, err = os.Stat(filepath.Join(workspaceAnalyzePath(dir), "scan.pdf.p01.jpg"))
+	require.NoError(t, err)
 }
 
 func TestPrepAnalyzeVideo(t *testing.T) {

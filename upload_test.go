@@ -336,28 +336,26 @@ func TestUploadPageShowsAnalyzeWhenLLMConfigured(t *testing.T) {
 
 func TestPrepWorkspace(t *testing.T) {
 	dir := t.TempDir()
-	// Fresh and expired cache entries, plus an interrupted tmp write.
-	require.NoError(t, os.MkdirAll(workspaceCachePath(dir), 0o755))
-	fresh := filepath.Join(workspaceCachePath(dir), strings.Repeat("a", 64)+".txt")
-	expired := filepath.Join(workspaceCachePath(dir), strings.Repeat("b", 64)+".txt")
-	require.NoError(t, os.WriteFile(fresh, []byte("new"), 0o644))
-	require.NoError(t, os.WriteFile(expired, []byte("old"), 0o644))
-	old := time.Now().Add(-2 * convertCacheTTL)
-	require.NoError(t, os.Chtimes(expired, old, old))
+	// An interrupted tmp write and a previous run's analyze product.
 	require.NoError(t, os.MkdirAll(workspaceTmpPath(dir), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspaceTmpPath(dir), "tmp-stale"), []byte("junk"), 0o644))
+	require.NoError(t, os.MkdirAll(workspaceAnalyzePath(dir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceAnalyzePath(dir), "old.txt"), []byte("junk"), 0o644))
+	// A staged file in the workspace root stays untouched.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "staged.txt"), []byte("keep"), 0o644))
 
 	require.NoError(t, prepWorkspace(dir))
 
-	// Temp junk gone, staged files untouched.
+	// Temp junk and old analyze products gone, staged files untouched.
 	entries, err := os.ReadDir(workspaceTmpPath(dir))
 	require.NoError(t, err)
 	require.Empty(t, entries)
-	// Cache pruned by TTL: fresh kept, expired removed.
-	_, err = os.Stat(fresh)
+	entries, err = os.ReadDir(workspaceAnalyzePath(dir))
 	require.NoError(t, err)
-	_, err = os.Stat(expired)
-	require.True(t, os.IsNotExist(err))
+	require.Empty(t, entries)
+	data, err := os.ReadFile(filepath.Join(dir, "staged.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "keep", string(data))
 }
 
 func TestRenameWorkspaceFile(t *testing.T) {
