@@ -15,12 +15,15 @@ s3:
   # force_path_style: false
 upload:
   workspace: upload-workspace
-# Optional OpenAI-compatible LLM endpoints. chat is used by file analysis
+# Optional LLM endpoints and vector store. chat is used by file analysis
 # on the upload page; chat.url and chat.model must be set together, effort is
 # the model's reasoning effort, headers is an optional map of HTTP headers.
 # embeddings is an independent endpoint (no chat defaults); embeddings.url and
 # embeddings.model must be set together, dimensions is optional, dialect
 # defaults to bailian_multimodal_embedding (currently the only supported value).
+# vectors is an independent vector store; url, username, password, database,
+# and table must be set together, dialect defaults to aliyun_oss_vectors
+# (currently the only supported value).
 # llm:
 #   chat:
 #     url: https://api.example.com/v1/chat/completions
@@ -35,3 +38,10 @@ upload:
 #     dialect: bailian_multimodal_embedding
 #     headers:
 #       Authorization: Bearer REPLACE_ME
+#   vectors:
+#     dialect: aliyun_oss_vectors
+#     url: https://vectors.example.com
+#     username: REPLACE_ME
+#     password: REPLACE_ME
+#     database: example-database
+#     table: example-table

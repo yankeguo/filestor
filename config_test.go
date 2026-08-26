@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -137,6 +138,102 @@ func TestLoadConfigLLMEmbeddingsDialect(t *testing.T) {
 	_, err = loadConfig(path)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "llm.embeddings.dialect")
+}
+
+func TestLoadConfigLLMVectors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
+  embeddings:
+    url: https://emb.example.com/v1/embeddings
+    model: emb-model
+  vectors:
+    url: ' https://vectors.example.com '
+    username: ' vec-user '
+    password: vec-pass
+    database: ' vec-db '
+    table: ' vec-table '
+`), 0o644))
+	cfg, err := loadConfig(path)
+	require.NoError(t, err)
+	require.Equal(t, "https://vectors.example.com", cfg.LLM.Vectors.URL)
+	require.Equal(t, "vec-user", cfg.LLM.Vectors.Username)
+	require.Equal(t, "vec-pass", cfg.LLM.Vectors.Password)
+	require.Equal(t, "vec-db", cfg.LLM.Vectors.Database)
+	require.Equal(t, "vec-table", cfg.LLM.Vectors.Table)
+	require.Equal(t, defaultVectorsDialect, cfg.LLM.Vectors.Dialect)
+
+	// embeddings and vectors are independent: vectors gets no embeddings defaults.
+	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
+  embeddings:
+    url: https://emb.example.com/v1/embeddings
+    model: emb-model
+`), 0o644))
+	cfg, err = loadConfig(path)
+	require.NoError(t, err)
+	require.Empty(t, cfg.LLM.Vectors.URL)
+	require.Empty(t, cfg.LLM.Vectors.Username)
+	require.Empty(t, cfg.LLM.Vectors.Password)
+	require.Empty(t, cfg.LLM.Vectors.Database)
+	require.Empty(t, cfg.LLM.Vectors.Table)
+	require.Equal(t, defaultVectorsDialect, cfg.LLM.Vectors.Dialect)
+}
+
+func TestLoadConfigLLMVectorsRequiresTogether(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	full := map[string]string{
+		"url":      "https://vectors.example.com",
+		"username": "vec-user",
+		"password": "vec-pass",
+		"database": "vec-db",
+		"table":    "vec-table",
+	}
+	keys := []string{"url", "username", "password", "database", "table"}
+	for _, skip := range keys {
+		var b strings.Builder
+		b.WriteString("llm:\n  vectors:\n")
+		for _, k := range keys {
+			if k == skip {
+				continue
+			}
+			b.WriteString("    " + k + ": " + full[k] + "\n")
+		}
+		require.NoError(t, os.WriteFile(path, []byte(baseYAML()+b.String()), 0o644))
+		_, err := loadConfig(path)
+		require.Error(t, err, skip)
+		require.Contains(t, err.Error(), "llm.vectors.url, llm.vectors.username, llm.vectors.password, llm.vectors.database, and llm.vectors.table")
+	}
+}
+
+func TestLoadConfigLLMVectorsDialect(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
+  vectors:
+    url: https://vectors.example.com
+    username: vec-user
+    password: vec-pass
+    database: vec-db
+    table: vec-table
+    dialect: ' aliyun_oss_vectors '
+`), 0o644))
+	cfg, err := loadConfig(path)
+	require.NoError(t, err)
+	require.Equal(t, defaultVectorsDialect, cfg.LLM.Vectors.Dialect)
+
+	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
+  vectors:
+    url: https://vectors.example.com
+    username: vec-user
+    password: vec-pass
+    database: vec-db
+    table: vec-table
+    dialect: pinecone
+`), 0o644))
+	_, err = loadConfig(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "llm.vectors.dialect")
 }
 
 func TestLoadConfigLLMRequiresPair(t *testing.T) {

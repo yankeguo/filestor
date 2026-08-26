@@ -13,6 +13,7 @@ import (
 const (
 	defaultUploadWorkspace   = "upload-workspace"
 	defaultEmbeddingsDialect = "bailian_multimodal_embedding"
+	defaultVectorsDialect    = "aliyun_oss_vectors"
 )
 
 type Config struct {
@@ -43,10 +44,11 @@ type UploadConfig struct {
 	Workspace string `yaml:"workspace"`
 }
 
-// LLMConfig groups the optional OpenAI-compatible endpoints.
+// LLMConfig groups the optional OpenAI-compatible endpoints and vector store.
 type LLMConfig struct {
 	Chat       ChatConfig       `yaml:"chat"`
 	Embeddings EmbeddingsConfig `yaml:"embeddings"`
+	Vectors    VectorsConfig    `yaml:"vectors"`
 }
 
 // ChatConfig describes an optional OpenAI-compatible chat endpoint used by
@@ -68,6 +70,19 @@ type EmbeddingsConfig struct {
 	Headers    map[string]string `yaml:"headers"`
 	Dimensions int               `yaml:"dimensions"`
 	Dialect    string            `yaml:"dialect"`
+}
+
+// VectorsConfig describes an optional vector store used to persist embeddings.
+// url, username, password, database, and table must be set together.
+// dialect selects the store API; empty defaults to aliyun_oss_vectors,
+// currently the only supported value.
+type VectorsConfig struct {
+	Dialect  string `yaml:"dialect"`
+	URL      string `yaml:"url"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+	Database string `yaml:"database"`
+	Table    string `yaml:"table"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -147,6 +162,35 @@ func (c *Config) validate() error {
 		c.LLM.Embeddings.Dialect = defaultEmbeddingsDialect
 	} else if c.LLM.Embeddings.Dialect != defaultEmbeddingsDialect {
 		return fmt.Errorf("config: llm.embeddings.dialect %q is not supported", c.LLM.Embeddings.Dialect)
+	}
+	c.LLM.Vectors.Dialect = strings.TrimSpace(c.LLM.Vectors.Dialect)
+	c.LLM.Vectors.URL = strings.TrimSpace(c.LLM.Vectors.URL)
+	c.LLM.Vectors.Username = strings.TrimSpace(c.LLM.Vectors.Username)
+	c.LLM.Vectors.Database = strings.TrimSpace(c.LLM.Vectors.Database)
+	c.LLM.Vectors.Table = strings.TrimSpace(c.LLM.Vectors.Table)
+	n := 0
+	if c.LLM.Vectors.URL != "" {
+		n++
+	}
+	if c.LLM.Vectors.Username != "" {
+		n++
+	}
+	if c.LLM.Vectors.Password != "" {
+		n++
+	}
+	if c.LLM.Vectors.Database != "" {
+		n++
+	}
+	if c.LLM.Vectors.Table != "" {
+		n++
+	}
+	if n != 0 && n != 5 {
+		return fmt.Errorf("config: llm.vectors.url, llm.vectors.username, llm.vectors.password, llm.vectors.database, and llm.vectors.table must be set together")
+	}
+	if c.LLM.Vectors.Dialect == "" {
+		c.LLM.Vectors.Dialect = defaultVectorsDialect
+	} else if c.LLM.Vectors.Dialect != defaultVectorsDialect {
+		return fmt.Errorf("config: llm.vectors.dialect %q is not supported", c.LLM.Vectors.Dialect)
 	}
 	return nil
 }

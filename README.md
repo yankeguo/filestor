@@ -5,7 +5,7 @@ Cookie-authenticated browser for one S3-compatible bucket (Aliyun OSS, Qcloud CO
 ## Features
 
 - Standard `net/http` server
-- YAML config: `admin.{username,password}`, `s3.{endpoint,region,bucket,access_key_id,secret_access_key}` (+ optional `s3.force_path_style`), optional `upload.workspace`, `llm.chat.{url,model,effort,headers}` and `llm.embeddings.{url,model,headers,dimensions,dialect}`
+- YAML config: `admin.{username,password}`, `s3.{endpoint,region,bucket,access_key_id,secret_access_key}` (+ optional `s3.force_path_style`), optional `upload.workspace`, `llm.chat.{url,model,effort,headers}`, `llm.embeddings.{url,model,headers,dimensions,dialect}` and `llm.vectors.{dialect,url,username,password,database,table}`
 - Cookie login (HMAC, HttpOnly, SameSite=Lax)
 - Calendar browse at `/browse`: monthly grid (weeks start Monday, sticky on scroll) with days holding bundles highlighted, next to a list of every bundle day of the year (newest first, `#day-YYYY-MM-DD` anchors, scrolled to the selected day); click a bundle through to a dedicated bundle view (title/date header, file stats, image gallery and video/audio players via inline presigned URLs)
 - `GET /download` 302s to a 5-minute presigned GET URL (`Content-Disposition: attachment`); `GET /preview` signs without it for inline rendering
@@ -76,9 +76,16 @@ upload:
 #     dialect: bailian_multimodal_embedding
 #     headers:
 #       Authorization: Bearer REPLACE_ME
+#   vectors:
+#     dialect: aliyun_oss_vectors
+#     url: https://vectors.example.com
+#     username: REPLACE_ME
+#     password: REPLACE_ME
+#     database: example-database
+#     table: example-table
 ```
 
-All of `admin.username`, `admin.password`, and `s3.{endpoint,region,bucket,access_key_id,secret_access_key}` are required; `s3.force_path_style` is optional (needed by MinIO-style vendors). Any S3-compatible storage works — Aliyun OSS (use its S3-compatible endpoint `https://s3.oss-{region}.aliyuncs.com`), Qcloud COS (`https://cos.{region}.myqcloud.com`), AWS S3, MinIO, etc. `endpoint` may omit `https://`; it is added on load. `upload.workspace` defaults to `upload-workspace` (relative to the process working directory; in the container that is `/upload-workspace`). `llm.chat.{url,model,effort,headers}` is an optional OpenAI-compatible chat endpoint used by file analysis on `/upload`; `url` and `model` must be set together, `effort` is the model's reasoning effort, and `headers` is an optional map of extra HTTP headers (e.g. `Authorization`). `llm.embeddings.{url,model,headers,dimensions,dialect}` is an optional, independent OpenAI-compatible embeddings endpoint (no `chat` defaults); `url` and `model` must be set together, `dimensions` is optional, and `dialect` defaults to `bailian_multimodal_embedding` (currently the only supported value). Do not commit `config.yaml`.
+All of `admin.username`, `admin.password`, and `s3.{endpoint,region,bucket,access_key_id,secret_access_key}` are required; `s3.force_path_style` is optional (needed by MinIO-style vendors). Any S3-compatible storage works — Aliyun OSS (use its S3-compatible endpoint `https://s3.oss-{region}.aliyuncs.com`), Qcloud COS (`https://cos.{region}.myqcloud.com`), AWS S3, MinIO, etc. `endpoint` may omit `https://`; it is added on load. `upload.workspace` defaults to `upload-workspace` (relative to the process working directory; in the container that is `/upload-workspace`). `llm.chat.{url,model,effort,headers}` is an optional OpenAI-compatible chat endpoint used by file analysis on `/upload`; `url` and `model` must be set together, `effort` is the model's reasoning effort, and `headers` is an optional map of extra HTTP headers (e.g. `Authorization`). `llm.embeddings.{url,model,headers,dimensions,dialect}` is an optional, independent OpenAI-compatible embeddings endpoint (no `chat` defaults); `url` and `model` must be set together, `dimensions` is optional, and `dialect` defaults to `bailian_multimodal_embedding` (currently the only supported value). `llm.vectors.{dialect,url,username,password,database,table}` is an optional, independent vector store (no `embeddings` defaults); `url`, `username`, `password`, `database`, and `table` must be set together, and `dialect` defaults to `aliyun_oss_vectors` (currently the only supported value). Do not commit `config.yaml`.
 
 ## Auth
 
