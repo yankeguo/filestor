@@ -212,7 +212,7 @@ var analyzeDecisionTools = analyzeTools[3:]
 // analyzeAgent runs the chat-completions tool loop against the configured
 // OpenAI-compatible endpoint.
 type analyzeAgent struct {
-	cfg          ChatConfig
+	cfg          OpenAIChatConfig
 	dir          string
 	state        *workspaceStateStore
 	http         *http.Client
@@ -231,7 +231,7 @@ type analyzeAgent struct {
 }
 
 func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
-	if s.Config == nil || s.Config.LLM.Chat.URL == "" {
+	if s.Config == nil || s.Config.LLM.Chat.OpenAI.URL == "" {
 		http.Error(w, "llm not configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -254,7 +254,7 @@ func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
 	// run, so the file count cannot change underneath the loop.
 	rounds, toolCalls := analyzeBudget(len(files))
 	ag := &analyzeAgent{
-		cfg:          s.Config.LLM.Chat,
+		cfg:          s.Config.LLM.Chat.OpenAI,
 		dir:          dir,
 		state:        s.state,
 		http:         &http.Client{Timeout: analyzeHTTPTimeout},

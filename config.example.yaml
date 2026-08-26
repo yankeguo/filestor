@@ -15,33 +15,33 @@ s3:
   # force_path_style: false
 upload:
   workspace: upload-workspace
-# Optional LLM endpoints and vector store. chat is used by file analysis
-# on the upload page; chat.url and chat.model must be set together, effort is
-# the model's reasoning effort, headers is an optional map of HTTP headers.
-# embeddings is an independent endpoint (no chat defaults); embeddings.url and
-# embeddings.model must be set together, dimensions is optional, dialect
-# defaults to bailian_multimodal_embedding (currently the only supported value).
-# vectors is an independent vector store; url, username, password, database,
-# and table must be set together, dialect defaults to aliyun_oss_vectors
-# (currently the only supported value).
+# Optional LLM endpoints and vector store. Each capability is keyed by
+# provider (unknown keys are rejected). chat.openai is used by file analysis
+# on the upload page; url and model must be set together, effort is the
+# model's reasoning effort, headers is an optional map of HTTP headers.
+# embeddings.bailian_multimodal_embedding is independent of chat (no
+# defaults); url and model must be set together, dimensions is optional.
+# vectors.aliyun_oss_vectors is an independent vector store; url, username,
+# password, database, and table must be set together.
 # llm:
 #   chat:
-#     url: https://api.example.com/v1/chat/completions
-#     model: my-model
-#     effort: medium
-#     headers:
-#       Authorization: Bearer REPLACE_ME
+#     openai:
+#       url: https://api.example.com/v1/chat/completions
+#       model: my-model
+#       effort: medium
+#       headers:
+#         Authorization: Bearer REPLACE_ME
 #   embeddings:
-#     url: https://api.example.com/v1/embeddings
-#     model: my-embedding-model
-#     dimensions: 1024
-#     dialect: bailian_multimodal_embedding
-#     headers:
-#       Authorization: Bearer REPLACE_ME
+#     bailian_multimodal_embedding:
+#       url: https://api.example.com/v1/embeddings
+#       model: my-embedding-model
+#       dimensions: 1024
+#       headers:
+#         Authorization: Bearer REPLACE_ME
 #   vectors:
-#     dialect: aliyun_oss_vectors
-#     url: https://vectors.example.com
-#     username: REPLACE_ME
-#     password: REPLACE_ME
-#     database: example-database
-#     table: example-table
+#     aliyun_oss_vectors:
+#       url: https://vectors.example.com
+#       username: REPLACE_ME
+#       password: REPLACE_ME
+#       database: example-database
+#       table: example-table

@@ -309,7 +309,7 @@ func TestUploadPushRequiresAnalyze(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	// The gate only exists while the LLM is configured; the URL is never
 	// called here, only its presence matters.
-	cfg.LLM.Chat = ChatConfig{URL: "http://127.0.0.1:1/", Model: "m"}
+	cfg.LLM.Chat.OpenAI = OpenAIChatConfig{URL: "http://127.0.0.1:1/", Model: "m"}
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644))
 	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "t"}))
@@ -329,7 +329,7 @@ func TestUploadPushRequiresAnalyze(t *testing.T) {
 
 func TestUploadAddClearsAnalyzed(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
-	cfg.LLM.Chat = ChatConfig{URL: "http://127.0.0.1:1/", Model: "m"}
+	cfg.LLM.Chat.OpenAI = OpenAIChatConfig{URL: "http://127.0.0.1:1/", Model: "m"}
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644))
 	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "t", Analyzed: true}))
@@ -344,7 +344,7 @@ func TestUploadAddClearsAnalyzed(t *testing.T) {
 
 func TestUploadDeleteClearsAnalyzed(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
-	cfg.LLM.Chat = ChatConfig{URL: "http://127.0.0.1:1/", Model: "m"}
+	cfg.LLM.Chat.OpenAI = OpenAIChatConfig{URL: "http://127.0.0.1:1/", Model: "m"}
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b"), 0o644))

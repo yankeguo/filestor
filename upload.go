@@ -54,7 +54,7 @@ type uploadPageData struct {
 // workspace's .filestor meta directory, so it survives page reloads but stays
 // invisible to the staging list. Analyzed marks that the staged files went
 // through one successful analyze run; adding or deleting staged files clears
-// it, and push requires it while llm.chat.url is configured.
+// it, and push requires it while llm.chat.openai.url is configured.
 type workspaceState struct {
 	Time     string `json:"time"`
 	Title    string `json:"title"`
@@ -377,7 +377,7 @@ func (s *Server) handleUploadPage(w http.ResponseWriter, r *http.Request) {
 		Files:      files,
 		Time:       st.Time,
 		Title:      st.Title,
-		CanAnalyze: s.Config != nil && s.Config.LLM.Chat.URL != "",
+		CanAnalyze: s.Config != nil && s.Config.LLM.Chat.OpenAI.URL != "",
 		Analyzed:   st.Analyzed,
 	})
 }

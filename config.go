@@ -10,11 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	defaultUploadWorkspace   = "upload-workspace"
-	defaultEmbeddingsDialect = "bailian_multimodal_embedding"
-	defaultVectorsDialect    = "aliyun_oss_vectors"
-)
+const defaultUploadWorkspace = "upload-workspace"
 
 type Config struct {
 	Admin  AdminConfig  `yaml:"admin"`
@@ -44,40 +40,49 @@ type UploadConfig struct {
 	Workspace string `yaml:"workspace"`
 }
 
-// LLMConfig groups the optional OpenAI-compatible endpoints and vector store.
+// LLMConfig groups optional chat, embeddings, and vector-store backends.
+// Each capability is keyed by provider; unknown provider keys are rejected.
 type LLMConfig struct {
 	Chat       ChatConfig       `yaml:"chat"`
 	Embeddings EmbeddingsConfig `yaml:"embeddings"`
 	Vectors    VectorsConfig    `yaml:"vectors"`
 }
 
-// ChatConfig describes an optional OpenAI-compatible chat endpoint used by
-// POST /upload/analyze. url and model must be set together.
+// ChatConfig holds chat providers. openai is an OpenAI-compatible chat
+// endpoint used by POST /upload/analyze; url and model must be set together.
 type ChatConfig struct {
+	OpenAI OpenAIChatConfig `yaml:"openai"`
+}
+
+type OpenAIChatConfig struct {
 	URL     string            `yaml:"url"`
 	Model   string            `yaml:"model"`
 	Effort  string            `yaml:"effort"`
 	Headers map[string]string `yaml:"headers"`
 }
 
-// EmbeddingsConfig describes an optional OpenAI-compatible embeddings
-// endpoint. url and model must be set together; dimensions is optional.
-// dialect selects the request/response shape; empty defaults to
-// bailian_multimodal_embedding, currently the only supported value.
+// EmbeddingsConfig holds embeddings providers. bailian_multimodal_embedding
+// is independent of chat (no fallback); url and model must be set together,
+// dimensions is optional.
 type EmbeddingsConfig struct {
+	BailianMultimodalEmbedding BailianMultimodalEmbeddingConfig `yaml:"bailian_multimodal_embedding"`
+}
+
+type BailianMultimodalEmbeddingConfig struct {
 	URL        string            `yaml:"url"`
 	Model      string            `yaml:"model"`
 	Headers    map[string]string `yaml:"headers"`
 	Dimensions int               `yaml:"dimensions"`
-	Dialect    string            `yaml:"dialect"`
 }
 
-// VectorsConfig describes an optional vector store used to persist embeddings.
-// url, username, password, database, and table must be set together.
-// dialect selects the store API; empty defaults to aliyun_oss_vectors,
-// currently the only supported value.
+// VectorsConfig holds vector-store providers. aliyun_oss_vectors is
+// independent of embeddings (no fallback); url, username, password,
+// database, and table must be set together.
 type VectorsConfig struct {
-	Dialect  string `yaml:"dialect"`
+	AliyunOSSVectors AliyunOSSVectorsConfig `yaml:"aliyun_oss_vectors"`
+}
+
+type AliyunOSSVectorsConfig struct {
 	URL      string `yaml:"url"`
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
@@ -141,56 +146,47 @@ func (c *Config) validate() error {
 	if c.Upload.Workspace == "" {
 		c.Upload.Workspace = defaultUploadWorkspace
 	}
-	c.LLM.Chat.URL = strings.TrimSpace(c.LLM.Chat.URL)
-	c.LLM.Chat.Model = strings.TrimSpace(c.LLM.Chat.Model)
-	c.LLM.Chat.Effort = strings.TrimSpace(c.LLM.Chat.Effort)
-	if (c.LLM.Chat.URL == "") != (c.LLM.Chat.Model == "") {
-		return fmt.Errorf("config: llm.chat.url and llm.chat.model must be set together")
+	openai := &c.LLM.Chat.OpenAI
+	openai.URL = strings.TrimSpace(openai.URL)
+	openai.Model = strings.TrimSpace(openai.Model)
+	openai.Effort = strings.TrimSpace(openai.Effort)
+	if (openai.URL == "") != (openai.Model == "") {
+		return fmt.Errorf("config: llm.chat.openai.url and llm.chat.openai.model must be set together")
 	}
-	c.LLM.Chat.Headers = normalizeHeaders(c.LLM.Chat.Headers)
-	c.LLM.Embeddings.URL = strings.TrimSpace(c.LLM.Embeddings.URL)
-	c.LLM.Embeddings.Model = strings.TrimSpace(c.LLM.Embeddings.Model)
-	c.LLM.Embeddings.Headers = normalizeHeaders(c.LLM.Embeddings.Headers)
-	c.LLM.Embeddings.Dialect = strings.TrimSpace(c.LLM.Embeddings.Dialect)
-	if (c.LLM.Embeddings.URL == "") != (c.LLM.Embeddings.Model == "") {
-		return fmt.Errorf("config: llm.embeddings.url and llm.embeddings.model must be set together")
+	openai.Headers = normalizeHeaders(openai.Headers)
+	emb := &c.LLM.Embeddings.BailianMultimodalEmbedding
+	emb.URL = strings.TrimSpace(emb.URL)
+	emb.Model = strings.TrimSpace(emb.Model)
+	emb.Headers = normalizeHeaders(emb.Headers)
+	if (emb.URL == "") != (emb.Model == "") {
+		return fmt.Errorf("config: llm.embeddings.bailian_multimodal_embedding.url and llm.embeddings.bailian_multimodal_embedding.model must be set together")
 	}
-	if c.LLM.Embeddings.Dimensions < 0 {
-		return fmt.Errorf("config: llm.embeddings.dimensions must not be negative")
+	if emb.Dimensions < 0 {
+		return fmt.Errorf("config: llm.embeddings.bailian_multimodal_embedding.dimensions must not be negative")
 	}
-	if c.LLM.Embeddings.Dialect == "" {
-		c.LLM.Embeddings.Dialect = defaultEmbeddingsDialect
-	} else if c.LLM.Embeddings.Dialect != defaultEmbeddingsDialect {
-		return fmt.Errorf("config: llm.embeddings.dialect %q is not supported", c.LLM.Embeddings.Dialect)
-	}
-	c.LLM.Vectors.Dialect = strings.TrimSpace(c.LLM.Vectors.Dialect)
-	c.LLM.Vectors.URL = strings.TrimSpace(c.LLM.Vectors.URL)
-	c.LLM.Vectors.Username = strings.TrimSpace(c.LLM.Vectors.Username)
-	c.LLM.Vectors.Database = strings.TrimSpace(c.LLM.Vectors.Database)
-	c.LLM.Vectors.Table = strings.TrimSpace(c.LLM.Vectors.Table)
+	vec := &c.LLM.Vectors.AliyunOSSVectors
+	vec.URL = strings.TrimSpace(vec.URL)
+	vec.Username = strings.TrimSpace(vec.Username)
+	vec.Database = strings.TrimSpace(vec.Database)
+	vec.Table = strings.TrimSpace(vec.Table)
 	n := 0
-	if c.LLM.Vectors.URL != "" {
+	if vec.URL != "" {
 		n++
 	}
-	if c.LLM.Vectors.Username != "" {
+	if vec.Username != "" {
 		n++
 	}
-	if c.LLM.Vectors.Password != "" {
+	if vec.Password != "" {
 		n++
 	}
-	if c.LLM.Vectors.Database != "" {
+	if vec.Database != "" {
 		n++
 	}
-	if c.LLM.Vectors.Table != "" {
+	if vec.Table != "" {
 		n++
 	}
 	if n != 0 && n != 5 {
-		return fmt.Errorf("config: llm.vectors.url, llm.vectors.username, llm.vectors.password, llm.vectors.database, and llm.vectors.table must be set together")
-	}
-	if c.LLM.Vectors.Dialect == "" {
-		c.LLM.Vectors.Dialect = defaultVectorsDialect
-	} else if c.LLM.Vectors.Dialect != defaultVectorsDialect {
-		return fmt.Errorf("config: llm.vectors.dialect %q is not supported", c.LLM.Vectors.Dialect)
+		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.url, llm.vectors.aliyun_oss_vectors.username, llm.vectors.aliyun_oss_vectors.password, llm.vectors.aliyun_oss_vectors.database, and llm.vectors.aliyun_oss_vectors.table must be set together")
 	}
 	return nil
 }
