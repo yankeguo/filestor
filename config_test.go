@@ -130,7 +130,7 @@ func TestLoadConfigLLMVectors(t *testing.T) {
       model: emb-model
   vectors:
     aliyun_oss_vectors:
-      url: ' https://example-bucket.oss-cn-hangzhou.aliyuncs.com '
+      url: ' https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com '
       access_key_id: ' vec-ak '
       access_key_secret: ' vec-sk '
       index: ' vec-index '
@@ -138,7 +138,7 @@ func TestLoadConfigLLMVectors(t *testing.T) {
 	cfg, err := loadConfig(path)
 	require.NoError(t, err)
 	vec := cfg.LLM.Vectors.AliyunOSSVectors
-	require.Equal(t, "https://example-bucket.oss-cn-hangzhou.aliyuncs.com", vec.URL)
+	require.Equal(t, "https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com", vec.URL)
 	require.Equal(t, "vec-ak", vec.AccessKeyID)
 	require.Equal(t, "vec-sk", vec.AccessKeySecret)
 	require.Equal(t, "vec-index", vec.Index)
@@ -163,7 +163,7 @@ func TestLoadConfigLLMVectorsRequiresTogether(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	full := map[string]string{
-		"url":               "https://example-bucket.oss-cn-hangzhou.aliyuncs.com",
+		"url":               "https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com",
 		"access_key_id":     "vec-ak",
 		"access_key_secret": "vec-sk",
 		"index":             "vec-index",

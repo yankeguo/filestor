@@ -199,8 +199,8 @@ function renderJob(job: JobProgress | null): void {
   if (job.kind === 'push') {
     const pct = job.total_bytes ? Math.floor(((job.done_bytes || 0) * 100) / job.total_bytes) : 0
     const n = (job.done || 0) + (job.file ? 1 : 0)
-    let label = 'Uploading ' + n + '/' + job.total
-    if (job.file) label += ' (' + job.file + ')'
+    let label = job.message || 'Uploading ' + n + '/' + job.total
+    if (!job.message && job.file) label += ' (' + job.file + ')'
     if (job.prefix) label += ' to ' + job.prefix
     setBar(pct, true, label)
   }

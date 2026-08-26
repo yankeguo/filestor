@@ -32,6 +32,11 @@ func NewServer(cfg *Config, store ObjectStore) *Server {
 		if err := prepWorkspace(s.workspaceDir()); err != nil {
 			log.Println("prepare workspace:", err)
 		}
+		// The digest embedding pipeline needs both sides; with only one
+		// configured it stays off.
+		if e, v := cfg.LLM.Embeddings.BailianMultimodalEmbedding, cfg.LLM.Vectors.AliyunOSSVectors; (e.URL != "") != (v.URL != "") {
+			log.Println("config: llm.embeddings and llm.vectors take effect only together; digest embedding is off")
+		}
 	}
 	return s
 }

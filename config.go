@@ -193,6 +193,11 @@ func (c *Config) validate() error {
 	if err := requireHTTPURL("llm.vectors.aliyun_oss_vectors.url", vec.URL); err != nil {
 		return err
 	}
+	if vec.URL != "" {
+		if _, _, err := parseVectorsEndpoint(vec.URL); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+	}
 	return nil
 }
 

@@ -480,3 +480,127 @@ func TestUploadPushNoStore(t *testing.T) {
 	cookie := loginCookie(t, h)
 	require.Equal(t, http.StatusServiceUnavailable, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
 }
+
+// rewriteTransport redirects every request to target, keeping the original
+// path and query: it points the OSS Vectors client at a test server while
+// the config carries a real-shaped host.
+type rewriteTransport struct{ target *url.URL }
+
+func (t rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.URL.Scheme = t.target.Scheme
+	req.URL.Host = t.target.Host
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+func TestUploadPushEmbedsDigest(t *testing.T) {
+	embedCalls := 0
+	emb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		embedCalls++
+		_, _ = w.Write([]byte(`{"output":{"embeddings":[{"index":0,"embedding":[0.1,0.2],"type":"text"}]}}`))
+	}))
+	t.Cleanup(emb.Close)
+	var vecBody map[string]any
+	vec := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&vecBody)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(vec.Close)
+
+	// Point the vectors client at the test server despite the configured host.
+	target, err := url.Parse(vec.URL)
+	require.NoError(t, err)
+	oldClient := vectorsHTTPClient
+	vectorsHTTPClient = &http.Client{Transport: rewriteTransport{target: target}}
+	t.Cleanup(func() { vectorsHTTPClient = oldClient })
+
+	cfg := cfgWithWorkspace(t)
+	cfg.LLM.Embeddings.BailianMultimodalEmbedding = BailianMultimodalEmbeddingConfig{URL: emb.URL, Model: "m"}
+	cfg.LLM.Vectors.AliyunOSSVectors = AliyunOSSVectorsConfig{
+		URL:             "https://bkt.cn-hangzhou.oss-vectors.aliyuncs.com",
+		AccessKeyID:     "ak",
+		AccessKeySecret: "sk",
+		Index:           "idx",
+	}
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o644))
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "t", Analyzed: true}))
+	require.NoError(t, os.MkdirAll(workspaceDigestPath(dir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceDigestPath(dir), "text-01.txt"), []byte("chunk"), 0o644))
+	png := append(append([]byte{}, pngSig...), []byte("rest")...)
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceDigestPath(dir), "image-01-pic.png"), png, 0o644))
+	store := &fakeStore{}
+	srv := NewServer(cfg, store)
+	h := srv.Handler()
+	cookie := loginCookie(t, h)
+
+	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+	awaitIdle(t, srv)
+	require.Empty(t, srv.lastJob().Error)
+	id, ok := parseBundleID(srv.lastJob().Prefix)
+	require.True(t, ok)
+
+	// One embedding request per digest file; one PutVectors carrying every
+	// vector keyed by bundle id.
+	require.Equal(t, 2, embedCalls)
+	vs, ok := vecBody["vectors"].([]any)
+	require.True(t, ok)
+	require.Len(t, vs, 2)
+	require.Equal(t, id+"/image-01-pic.png", vs[0].(map[string]any)["key"])
+	require.Equal(t, id+"/text-01.txt", vs[1].(map[string]any)["key"])
+	require.Equal(t, "idx", vecBody["indexName"])
+
+	// The bundle completed and the workspace was cleaned.
+	require.Equal(t, []string{
+		bundlePrefix(id) + "/a.txt",
+		bundlePrefix(id) + "/.digest/image-01-pic.png",
+		bundlePrefix(id) + "/.digest/text-01.txt",
+		bundlePrefix(id) + "/" + bundleMetaName,
+		"index/2026/2026-08.json",
+	}, store.putKeys())
+	require.Equal(t, workspaceState{}, loadWorkspaceState(dir))
+}
+
+func TestUploadPushEmbedFailureSkipsIndex(t *testing.T) {
+	emb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("model down"))
+	}))
+	t.Cleanup(emb.Close)
+
+	cfg := cfgWithWorkspace(t)
+	cfg.LLM.Embeddings.BailianMultimodalEmbedding = BailianMultimodalEmbeddingConfig{URL: emb.URL, Model: "m"}
+	cfg.LLM.Vectors.AliyunOSSVectors = AliyunOSSVectorsConfig{
+		URL:             "https://bkt.cn-hangzhou.oss-vectors.aliyuncs.com",
+		AccessKeyID:     "ak",
+		AccessKeySecret: "sk",
+		Index:           "idx",
+	}
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o644))
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "t", Analyzed: true}))
+	require.NoError(t, os.MkdirAll(workspaceDigestPath(dir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceDigestPath(dir), "text-01.txt"), []byte("chunk"), 0o644))
+	store := &fakeStore{}
+	srv := NewServer(cfg, store)
+	h := srv.Handler()
+	cookie := loginCookie(t, h)
+
+	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+	awaitIdle(t, srv)
+	st := srv.lastJob()
+	require.Contains(t, st.Error, "embed")
+	require.Contains(t, st.Error, "model down")
+
+	// The embedding failed before meta and index: the bundle is neither
+	// discoverable nor recorded, and everything stays staged for a retry.
+	for _, k := range store.putKeys() {
+		require.False(t, strings.HasSuffix(k, bundleMetaName), k)
+		require.False(t, strings.HasPrefix(k, indexRoot+"/"), k)
+	}
+	require.Empty(t, srv.index.year(2026))
+	_, err := os.Stat(filepath.Join(dir, "a.txt"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(workspaceDigestPath(dir), "text-01.txt"))
+	require.NoError(t, err)
+}

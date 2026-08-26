@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -198,6 +199,30 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 		job.Done++
 		s.emitProgress(job, false)
 	}
+	// Embed the digest marks and write the vectors before the bundle becomes
+	// discoverable (meta) and recorded (index): a failure here stops the job
+	// with everything still staged for a retry.
+	if len(digest) > 0 && s.embeddingConfigured() {
+		ec := newEmbedClient(s.Config.LLM.Embeddings.BailianMultimodalEmbedding)
+		vecs, err := ec.embedDigest(context.Background(), workspaceDigestPath(dir), digest, func(i int, name string) {
+			job.Message = fmt.Sprintf("embedding digest %d/%d", i+1, len(digest))
+			s.emitProgress(job, false)
+		})
+		if err != nil {
+			fail("embed", err)
+			return
+		}
+		vc, err := newVectorsClient(s.Config.LLM.Vectors.AliyunOSSVectors)
+		if err != nil {
+			fail("vectors", err)
+			return
+		}
+		if err := vc.putVectors(context.Background(), meta.ID, meta, digest, vecs); err != nil {
+			fail("vectors", err)
+			return
+		}
+		job.Message = ""
+	}
 	// The bundle is complete: publish its meta, then record it in the index.
 	if err := s.store.Put(prefix+"/"+bundleMetaName, bytes.NewReader(raw), int64(len(raw))); err != nil {
 		fail(bundleMetaName, err)
@@ -223,6 +248,17 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 	s.emitDone(job)
 	s.emitState()
 	log.Printf("push finished: %s", prefix)
+}
+
+// embeddingConfigured reports whether the digest embedding pipeline is fully
+// configured: both the embeddings endpoint and the vector store.
+func (s *Server) embeddingConfigured() bool {
+	if s.Config == nil {
+		return false
+	}
+	e := s.Config.LLM.Embeddings.BailianMultimodalEmbedding
+	v := s.Config.LLM.Vectors.AliyunOSSVectors
+	return e.URL != "" && v.URL != ""
 }
 
 func (s *Server) pushOne(job *jobProgress, localPath, key string) error {
