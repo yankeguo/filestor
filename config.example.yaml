@@ -21,8 +21,9 @@ upload:
 # model's reasoning effort, headers is an optional map of HTTP headers.
 # embeddings.bailian_multimodal_embedding is independent of chat (no
 # defaults); url and model must be set together, dimensions is optional.
-# vectors.aliyun_oss_vectors is an independent vector store; url, username,
-# password, database, and table must be set together.
+# vectors.aliyun_oss_vectors is an independent vector store; url includes the
+# bucket host, and url, access_key_id, access_key_secret, and index must be
+# set together.
 # llm:
 #   chat:
 #     openai:
@@ -40,8 +41,7 @@ upload:
 #         Authorization: Bearer REPLACE_ME
 #   vectors:
 #     aliyun_oss_vectors:
-#       url: https://vectors.example.com
-#       username: REPLACE_ME
-#       password: REPLACE_ME
-#       database: example-database
-#       table: example-table
+#       url: https://example-bucket.oss-cn-hangzhou.aliyuncs.com
+#       access_key_id: REPLACE_ME
+#       access_key_secret: REPLACE_ME
+#       index: example-index

@@ -130,20 +130,18 @@ func TestLoadConfigLLMVectors(t *testing.T) {
       model: emb-model
   vectors:
     aliyun_oss_vectors:
-      url: ' https://vectors.example.com '
-      username: ' vec-user '
-      password: vec-pass
-      database: ' vec-db '
-      table: ' vec-table '
+      url: ' https://example-bucket.oss-cn-hangzhou.aliyuncs.com '
+      access_key_id: ' vec-ak '
+      access_key_secret: ' vec-sk '
+      index: ' vec-index '
 `), 0o644))
 	cfg, err := loadConfig(path)
 	require.NoError(t, err)
 	vec := cfg.LLM.Vectors.AliyunOSSVectors
-	require.Equal(t, "https://vectors.example.com", vec.URL)
-	require.Equal(t, "vec-user", vec.Username)
-	require.Equal(t, "vec-pass", vec.Password)
-	require.Equal(t, "vec-db", vec.Database)
-	require.Equal(t, "vec-table", vec.Table)
+	require.Equal(t, "https://example-bucket.oss-cn-hangzhou.aliyuncs.com", vec.URL)
+	require.Equal(t, "vec-ak", vec.AccessKeyID)
+	require.Equal(t, "vec-sk", vec.AccessKeySecret)
+	require.Equal(t, "vec-index", vec.Index)
 
 	// embeddings and vectors are independent: vectors gets no embeddings defaults.
 	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
@@ -156,23 +154,21 @@ func TestLoadConfigLLMVectors(t *testing.T) {
 	require.NoError(t, err)
 	vec = cfg.LLM.Vectors.AliyunOSSVectors
 	require.Empty(t, vec.URL)
-	require.Empty(t, vec.Username)
-	require.Empty(t, vec.Password)
-	require.Empty(t, vec.Database)
-	require.Empty(t, vec.Table)
+	require.Empty(t, vec.AccessKeyID)
+	require.Empty(t, vec.AccessKeySecret)
+	require.Empty(t, vec.Index)
 }
 
 func TestLoadConfigLLMVectorsRequiresTogether(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	full := map[string]string{
-		"url":      "https://vectors.example.com",
-		"username": "vec-user",
-		"password": "vec-pass",
-		"database": "vec-db",
-		"table":    "vec-table",
+		"url":               "https://example-bucket.oss-cn-hangzhou.aliyuncs.com",
+		"access_key_id":     "vec-ak",
+		"access_key_secret": "vec-sk",
+		"index":             "vec-index",
 	}
-	keys := []string{"url", "username", "password", "database", "table"}
+	keys := []string{"url", "access_key_id", "access_key_secret", "index"}
 	for _, skip := range keys {
 		var b strings.Builder
 		b.WriteString("llm:\n  vectors:\n    aliyun_oss_vectors:\n")
@@ -185,7 +181,7 @@ func TestLoadConfigLLMVectorsRequiresTogether(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte(baseYAML()+b.String()), 0o644))
 		_, err := loadConfig(path)
 		require.Error(t, err, skip)
-		require.Contains(t, err.Error(), "llm.vectors.aliyun_oss_vectors.url, llm.vectors.aliyun_oss_vectors.username, llm.vectors.aliyun_oss_vectors.password, llm.vectors.aliyun_oss_vectors.database, and llm.vectors.aliyun_oss_vectors.table")
+		require.Contains(t, err.Error(), "llm.vectors.aliyun_oss_vectors.url, llm.vectors.aliyun_oss_vectors.access_key_id, llm.vectors.aliyun_oss_vectors.access_key_secret, and llm.vectors.aliyun_oss_vectors.index")
 	}
 }
 

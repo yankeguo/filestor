@@ -76,18 +76,17 @@ type BailianMultimodalEmbeddingConfig struct {
 }
 
 // VectorsConfig holds vector-store providers. aliyun_oss_vectors is
-// independent of embeddings (no fallback); url, username, password,
-// database, and table must be set together.
+// independent of embeddings (no fallback); url (bucket is in the host),
+// access_key_id, access_key_secret, and index must be set together.
 type VectorsConfig struct {
 	AliyunOSSVectors AliyunOSSVectorsConfig `yaml:"aliyun_oss_vectors"`
 }
 
 type AliyunOSSVectorsConfig struct {
-	URL      string `yaml:"url"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
-	Database string `yaml:"database"`
-	Table    string `yaml:"table"`
+	URL             string `yaml:"url"`
+	AccessKeyID     string `yaml:"access_key_id"`
+	AccessKeySecret string `yaml:"access_key_secret"`
+	Index           string `yaml:"index"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -166,27 +165,24 @@ func (c *Config) validate() error {
 	}
 	vec := &c.LLM.Vectors.AliyunOSSVectors
 	vec.URL = strings.TrimSpace(vec.URL)
-	vec.Username = strings.TrimSpace(vec.Username)
-	vec.Database = strings.TrimSpace(vec.Database)
-	vec.Table = strings.TrimSpace(vec.Table)
+	vec.AccessKeyID = strings.TrimSpace(vec.AccessKeyID)
+	vec.AccessKeySecret = strings.TrimSpace(vec.AccessKeySecret)
+	vec.Index = strings.TrimSpace(vec.Index)
 	n := 0
 	if vec.URL != "" {
 		n++
 	}
-	if vec.Username != "" {
+	if vec.AccessKeyID != "" {
 		n++
 	}
-	if vec.Password != "" {
+	if vec.AccessKeySecret != "" {
 		n++
 	}
-	if vec.Database != "" {
+	if vec.Index != "" {
 		n++
 	}
-	if vec.Table != "" {
-		n++
-	}
-	if n != 0 && n != 5 {
-		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.url, llm.vectors.aliyun_oss_vectors.username, llm.vectors.aliyun_oss_vectors.password, llm.vectors.aliyun_oss_vectors.database, and llm.vectors.aliyun_oss_vectors.table must be set together")
+	if n != 0 && n != 4 {
+		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.url, llm.vectors.aliyun_oss_vectors.access_key_id, llm.vectors.aliyun_oss_vectors.access_key_secret, and llm.vectors.aliyun_oss_vectors.index must be set together")
 	}
 	return nil
 }
