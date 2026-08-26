@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -27,8 +28,8 @@ type detailData struct {
 
 // handleBundle renders one bundle by its UUID v4: meta from the in-memory
 // index (falling back to the bucket's .meta.json), file stats, type icons and
-// signed inline-preview URLs for browser-native media. Unknown or invalid
-// bundles are a 404, not the generic contents view.
+// inline previews for browser-native media. A non-UUID id is a 400, an
+// unknown bundle a 404.
 func (s *Server) handleBundle(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
 		http.Error(w, "object store unavailable", http.StatusServiceUnavailable)
@@ -98,21 +99,23 @@ func (s *Server) handleBundle(w http.ResponseWriter, r *http.Request) {
 				kind = ""
 			}
 			if kind != "" {
-				u, err := s.store.SignPreviewURL(obj.Key, signURLTTL)
-				if err != nil {
-					log.Println("sign preview:", err)
+				// Previews link the same-origin /preview route, which signs
+				// and redirects per request: render-time presigned URLs
+				// would expire long before a lazy-loaded image is scrolled
+				// into view or a media player is started.
+				f.Kind = kind
+				f.PreviewURL = "/preview?key=" + url.QueryEscape(obj.Key)
+				if kind == "image" {
+					data.HasImages = true
 				} else {
-					f.Kind = kind
-					f.PreviewURL = u
-					if kind == "image" {
-						data.HasImages = true
-					} else {
-						data.HasMedia = true
-					}
+					data.HasMedia = true
 				}
 			}
 			data.Files = append(data.Files, f)
 		}
+		// A truncated page with no objects only happens when common prefixes
+		// fill the page; a bundle has at most the .digest/ prefix, so the
+		// last object key always advances the marker.
 		if !page.IsTruncated || len(page.Objects) == 0 {
 			break
 		}

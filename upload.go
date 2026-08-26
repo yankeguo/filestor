@@ -433,24 +433,36 @@ func (s *Server) handleUploadAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir := s.workspaceDir()
+	saved := 0
+	fail := func(status int, msg string) {
+		if saved > 0 {
+			// Files already landed: the staged set changed, so invalidate the
+			// previous analyze run and refresh the page despite the failure.
+			s.state.markUnanalyzed()
+			s.emitFiles()
+			s.emitState()
+		}
+		http.Error(w, msg, status)
+	}
 	for _, fh := range headers {
 		name, err := sanitizeWorkspaceName(fh.Filename)
 		if err != nil {
-			http.Error(w, "invalid file name", http.StatusBadRequest)
+			fail(http.StatusBadRequest, "invalid file name")
 			return
 		}
 		src, err := fh.Open()
 		if err != nil {
-			http.Error(w, "read file", http.StatusBadRequest)
+			fail(http.StatusBadRequest, "read file")
 			return
 		}
 		err = saveWorkspaceFile(dir, name, src)
 		_ = src.Close()
 		if err != nil {
 			log.Println("save workspace file:", err)
-			http.Error(w, "save failed", http.StatusInternalServerError)
+			fail(http.StatusInternalServerError, "save failed")
 			return
 		}
+		saved++
 		// Pin as soon as the first file lands, even if a later part fails.
 		s.state.pin()
 	}

@@ -81,13 +81,18 @@ function pad2(n: number): string {
   return (n < 10 ? '0' : '') + n
 }
 
+function nowLocal(): string {
+  const d = new Date()
+  return (
+    d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) +
+    'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes())
+  )
+}
+
 // The server prefills the pinned staging time; fall back to now only when
 // nothing has been pinned yet (empty workspace).
 if (!pushTime.value) {
-  const d = new Date()
-  pushTime.value =
-    d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) +
-    'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes())
+  pushTime.value = nowLocal()
 }
 
 function saveState(): void {
@@ -151,7 +156,7 @@ function applyLock(): void {
 
 function applyState(st: WorkspaceState | null): void {
   if (!st) return
-  if (st.time && document.activeElement !== pushTime) pushTime.value = st.time
+  if (document.activeElement !== pushTime) pushTime.value = st.time || nowLocal()
   if (document.activeElement !== pushTitle) pushTitle.value = st.title || ''
   if (typeof st.analyzed === 'boolean') analyzed = st.analyzed
   applyLock()

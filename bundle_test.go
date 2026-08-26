@@ -126,3 +126,21 @@ func TestLoadBundleMeta(t *testing.T) {
 	_, err = loadBundleMeta(store, testBundleID2)
 	require.ErrorIs(t, err, errNotFound)
 }
+
+func TestBundleIndexAppendRefusesBrokenMonth(t *testing.T) {
+	store := &fakeStore{objects: map[string][]byte{
+		"index/2026/2026-08.json": []byte("not json"),
+	}}
+	idx := newBundleIndex()
+	require.NoError(t, idx.load(store))
+
+	// The corrupt month failed to load: appending into it is refused instead
+	// of rewriting the bucket file from the empty in-memory copy.
+	err := idx.append(store, bundleMeta{ID: testBundleID1, Title: "x", Time: "2026-08-24T06:59"})
+	require.Error(t, err)
+	require.Empty(t, store.putKeys())
+
+	// A healthy month still appends.
+	require.NoError(t, idx.append(store, bundleMeta{ID: testBundleID2, Title: "y", Time: "2026-09-01T10:00"}))
+	require.Equal(t, []string{"index/2026/2026-09.json"}, store.putKeys())
+}

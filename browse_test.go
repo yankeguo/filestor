@@ -412,11 +412,12 @@ func TestBundleDetail(t *testing.T) {
 	// Stats line; .meta.json is omitted.
 	require.Contains(t, body, "4 files")
 	require.NotContains(t, body, bundleMetaName)
-	// Inline previews for browser-native media, signed via the store.
+	// Inline previews for browser-native media go through the same-origin
+	// /preview route (signed per request, never expiring on a long-lived page).
 	require.Contains(t, body, "<img")
 	require.Contains(t, body, "<video")
 	require.Contains(t, body, "<audio")
-	require.Contains(t, body, "example.oss-cn-hangzhou.aliyuncs.com/preview/")
+	require.Contains(t, body, "/preview?key=content%2F55%2F0e%2F550e8400-e29b-41d4-a716-446655440000%2Fphoto.jpg")
 	// Non-previewable files keep a typed icon and download-only row.
 	require.Contains(t, body, "bi-file-earmark-pdf")
 	require.Contains(t, body, `/download?key=content%2f55%2f0e%2f550e8400-e29b-41d4-a716-446655440000%2fnotes.pdf`)

@@ -119,10 +119,11 @@ func TestUploadPushSuccess(t *testing.T) {
 	require.Equal(t, 2, st.Done)
 	require.Equal(t, int64(5), st.TotalBytes)
 	require.Equal(t, int64(5), st.DoneBytes)
+	// .meta.json is published last, after every file landed.
 	require.Equal(t, []string{
-		bundlePrefix(id) + "/" + bundleMetaName,
 		bundlePrefix(id) + "/a.txt",
 		bundlePrefix(id) + "/b.txt",
+		bundlePrefix(id) + "/" + bundleMetaName,
 		"index/2026/2026-08.json",
 	}, store.putKeys())
 
@@ -259,7 +260,7 @@ func TestUploadPushFailureKeepsFiles(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
 	awaitIdle(t, srv)
 	st := srv.lastJob()
-	require.Contains(t, st.Error, bundleMetaName)
+	require.Contains(t, st.Error, "a.txt")
 	require.Contains(t, st.Error, "oss down")
 
 	// The failed file stays staged.
@@ -292,12 +293,9 @@ func TestUploadPushFileFailureSkipsIndex(t *testing.T) {
 	st := srv.lastJob()
 	require.Contains(t, st.Error, "a.txt")
 	require.Contains(t, st.Error, "oss down")
-	keys := store.putKeys()
-	require.Len(t, keys, 1)
-	require.True(t, strings.HasSuffix(keys[0], "/"+bundleMetaName))
-	for _, k := range keys {
-		require.False(t, strings.HasPrefix(k, "index/"), k)
-	}
+	// The first file already failed, so nothing was ever written — least of
+	// all the index (and .meta.json is only published after every file).
+	require.Empty(t, store.putKeys())
 	// The in-memory index stays untouched too.
 	require.Empty(t, srv.index.year(2026))
 
@@ -420,14 +418,17 @@ func TestUploadPushWithDigest(t *testing.T) {
 	require.True(t, ok)
 
 	// The digest marks landed under the bundle's .digest directory (read in
-	// alphabetical order), and their bytes counted towards the total.
+	// alphabetical order) and count towards the file total; .meta.json is
+	// published last.
 	require.Equal(t, []string{
-		bundlePrefix(id) + "/" + bundleMetaName,
 		bundlePrefix(id) + "/a.txt",
 		bundlePrefix(id) + "/.digest/image-01-pic.png",
 		bundlePrefix(id) + "/.digest/text-01.txt",
+		bundlePrefix(id) + "/" + bundleMetaName,
 		"index/2026/2026-08.json",
 	}, store.putKeys())
+	require.Equal(t, 3, st.Total)
+	require.Equal(t, 3, st.Done)
 	require.Equal(t, int64(3+3+5), st.TotalBytes)
 
 	raw, err := store.Get(bundlePrefix(id) + "/.digest/text-01.txt")
@@ -472,4 +473,10 @@ func TestUploadPushDigestFailureSkipsIndex(t *testing.T) {
 	require.NoError(t, err)
 	_, err = os.Stat(filepath.Join(workspaceDigestPath(dir), "text-01.txt"))
 	require.NoError(t, err)
+}
+
+func TestUploadPushNoStore(t *testing.T) {
+	h := NewServer(cfgWithWorkspace(t), nil).Handler()
+	cookie := loginCookie(t, h)
+	require.Equal(t, http.StatusServiceUnavailable, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
 }

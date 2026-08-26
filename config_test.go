@@ -262,3 +262,13 @@ func TestLoadConfigRejectsMissingS3(t *testing.T) {
 		require.Contains(t, err.Error(), tc.want)
 	}
 }
+
+func TestLoadConfigLLMURLRequiresScheme(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := baseYAML() + "llm:\n  chat:\n    openai:\n      url: api.example.com/v1/chat/completions\n      model: my-model\n"
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o644))
+	_, err := loadConfig(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "llm.chat.openai.url must start with http:// or https://")
+}

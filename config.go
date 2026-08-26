@@ -152,6 +152,9 @@ func (c *Config) validate() error {
 	if (openai.URL == "") != (openai.Model == "") {
 		return fmt.Errorf("config: llm.chat.openai.url and llm.chat.openai.model must be set together")
 	}
+	if err := requireHTTPURL("llm.chat.openai.url", openai.URL); err != nil {
+		return err
+	}
 	openai.Headers = normalizeHeaders(openai.Headers)
 	emb := &c.LLM.Embeddings.BailianMultimodalEmbedding
 	emb.URL = strings.TrimSpace(emb.URL)
@@ -159,6 +162,9 @@ func (c *Config) validate() error {
 	emb.Headers = normalizeHeaders(emb.Headers)
 	if (emb.URL == "") != (emb.Model == "") {
 		return fmt.Errorf("config: llm.embeddings.bailian_multimodal_embedding.url and llm.embeddings.bailian_multimodal_embedding.model must be set together")
+	}
+	if err := requireHTTPURL("llm.embeddings.bailian_multimodal_embedding.url", emb.URL); err != nil {
+		return err
 	}
 	if emb.Dimensions < 0 {
 		return fmt.Errorf("config: llm.embeddings.bailian_multimodal_embedding.dimensions must not be negative")
@@ -183,6 +189,18 @@ func (c *Config) validate() error {
 	}
 	if n != 0 && n != 4 {
 		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.url, llm.vectors.aliyun_oss_vectors.access_key_id, llm.vectors.aliyun_oss_vectors.access_key_secret, and llm.vectors.aliyun_oss_vectors.index must be set together")
+	}
+	if err := requireHTTPURL("llm.vectors.aliyun_oss_vectors.url", vec.URL); err != nil {
+		return err
+	}
+	return nil
+}
+
+// requireHTTPURL rejects a configured URL without an http(s) scheme, so a
+// bare host:port fails at startup instead of at first use.
+func requireHTTPURL(field, url string) error {
+	if url != "" && !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return fmt.Errorf("config: %s must start with http:// or https://", field)
 	}
 	return nil
 }

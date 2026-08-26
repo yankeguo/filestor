@@ -108,10 +108,11 @@ type bundleIndex struct {
 	mu     sync.RWMutex
 	months map[string][]bundleMeta // "2006-01" -> entries
 	byID   map[string]bundleMeta   // lowercase uuid -> meta
+	broken map[string]bool         // months that failed to load; appends are refused
 }
 
 func newBundleIndex() *bundleIndex {
-	return &bundleIndex{months: map[string][]bundleMeta{}, byID: map[string]bundleMeta{}}
+	return &bundleIndex{months: map[string][]bundleMeta{}, byID: map[string]bundleMeta{}, broken: map[string]bool{}}
 }
 
 // parseIndexKey matches index/YYYY/YYYY-MM.json and returns the "YYYY-MM"
@@ -132,8 +133,10 @@ func parseIndexKey(key string) (string, bool) {
 }
 
 // load fetches every monthly index file concurrently. A file that cannot be
-// read or parsed is logged and skipped so one corrupt month does not empty
-// the calendar; only the key listing itself can fail the load.
+// read or parsed is logged and marked broken: the month is skipped on the
+// calendar, and appends into it are refused so a transient read failure can
+// never rewrite the bucket file from an incomplete in-memory copy. Only the
+// key listing itself can fail the load.
 func (x *bundleIndex) load(store ObjectStore) error {
 	keys, err := store.ListKeys(indexRoot + "/")
 	if err != nil {
@@ -141,6 +144,7 @@ func (x *bundleIndex) load(store ObjectStore) error {
 	}
 	months := map[string][]bundleMeta{}
 	byID := map[string]bundleMeta{}
+	broken := map[string]bool{}
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	for _, key := range keys {
@@ -154,17 +158,27 @@ func (x *bundleIndex) load(store ObjectStore) error {
 			data, err := store.Get(key)
 			if err != nil {
 				log.Println("load bundle index:", key, err)
+				mu.Lock()
+				broken[monthKey] = true
+				mu.Unlock()
 				return
 			}
 			var list []bundleMeta
 			if err := json.Unmarshal(data, &list); err != nil {
 				log.Println("parse bundle index:", key, err)
+				mu.Lock()
+				broken[monthKey] = true
+				mu.Unlock()
 				return
 			}
 			mu.Lock()
 			months[monthKey] = list
 			for _, m := range list {
-				byID[strings.ToLower(m.ID)] = m
+				id := strings.ToLower(m.ID)
+				if prev, dup := byID[id]; dup {
+					log.Printf("bundle index: duplicate id %s in %s and %s", m.ID, prev.Time, m.Time)
+				}
+				byID[id] = m
 			}
 			mu.Unlock()
 		}()
@@ -173,6 +187,7 @@ func (x *bundleIndex) load(store ObjectStore) error {
 	x.mu.Lock()
 	x.months = months
 	x.byID = byID
+	x.broken = broken
 	x.mu.Unlock()
 	return nil
 }
@@ -198,7 +213,10 @@ func (x *bundleIndex) year(year int) []bundleMeta {
 
 // append records a pushed bundle: the month file is rewritten first and the
 // in-memory index is only updated once the write lands, so a failed Put
-// leaves both untouched. Pushes are single-flight, so appends never race.
+// leaves both untouched. A month whose index failed to load at startup is
+// refused: rewriting it from the incomplete in-memory copy would drop every
+// entry the bucket file still holds. Pushes are single-flight, so appends
+// never race.
 func (x *bundleIndex) append(store ObjectStore, meta bundleMeta) error {
 	when, err := time.Parse(pushTimeLayout, meta.Time)
 	if err != nil {
@@ -206,6 +224,10 @@ func (x *bundleIndex) append(store ObjectStore, meta bundleMeta) error {
 	}
 	monthKey := when.Format(browseMonthLayout)
 	x.mu.RLock()
+	if x.broken[monthKey] {
+		x.mu.RUnlock()
+		return fmt.Errorf("monthly index %s failed to load at startup; refusing to rewrite it", monthKey)
+	}
 	list := append(append([]bundleMeta(nil), x.months[monthKey]...), meta)
 	x.mu.RUnlock()
 	data, err := json.Marshal(list)

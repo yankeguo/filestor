@@ -294,19 +294,24 @@ func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "llm not configured", http.StatusServiceUnavailable)
 		return
 	}
+	if !s.acquire(lockAnalyze) {
+		workspaceBusy(w)
+		return
+	}
+	// Snapshot the staged files under the lock: listing before acquiring it
+	// would let a concurrent add slip an unanalyzed file into a batch that
+	// still gets flagged analyzed.
 	dir := s.workspaceDir()
 	files, err := listWorkspaceFiles(dir)
 	if err != nil {
 		log.Println("list workspace:", err)
+		s.release(lockAnalyze)
 		http.Error(w, "list failed", http.StatusInternalServerError)
 		return
 	}
 	if len(files) == 0 {
+		s.release(lockAnalyze)
 		http.Error(w, "no staged files", http.StatusBadRequest)
-		return
-	}
-	if !s.acquire(lockAnalyze) {
-		workspaceBusy(w)
 		return
 	}
 	// The budget scales with the batch size; staging is locked for the whole
@@ -348,11 +353,15 @@ func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// A successful run marks the staged batch as analyzed; adding or
-		// deleting staged files clears the flag again (see upload.go).
+		// deleting staged files clears the flag again (see upload.go). If the
+		// flag cannot be persisted the push gate would stay closed, so report
+		// the run as failed instead of a silent success.
 		st := s.state.get()
 		st.Analyzed = true
 		if err := s.state.save(st); err != nil {
 			log.Println("save workspace state:", err)
+			s.emitFail(jobProgress{Kind: lockAnalyze, Error: "internal error"})
+			return
 		}
 		s.emitState()
 		s.emitDone(jobProgress{Kind: lockAnalyze, Title: title, Time: ag.when})
@@ -627,6 +636,9 @@ func prepAnalyze(ctx context.Context, dir string, files []workspaceFile, progres
 		}
 		entries = append(entries, prepEntry(ctx, dir, analyzeDir, f))
 	}
+	if progress != nil {
+		progress(jobProgress{Message: "converting", Done: len(files), Total: len(files)})
+	}
 	return entries
 }
 
@@ -689,7 +701,7 @@ func buildAnalyzeListing(entries []*analyzeEntry) string {
 	return b.String()
 }
 
-// indexEntries builds the agent's name lookups from a prep manifest.
+// indexEntries builds the agent's name lookups from the prep entries.
 func (a *analyzeAgent) indexEntries(list []*analyzeEntry) {
 	a.list = list
 	a.entries = make(map[string]*analyzeEntry, len(list))
@@ -1068,6 +1080,7 @@ func (a *analyzeAgent) toolMarkText(text string) string {
 	a.digestTexts++
 	name := fmt.Sprintf("text-%02d.txt", a.digestTexts)
 	if err := os.MkdirAll(workspaceDigestPath(a.dir), 0o755); err != nil {
+		a.digestTexts--
 		return "error: " + err.Error()
 	}
 	if err := os.WriteFile(filepath.Join(workspaceDigestPath(a.dir), name), []byte(text), 0o644); err != nil {
@@ -1099,9 +1112,15 @@ func (a *analyzeAgent) toolMarkImage(name string) string {
 				product, path = e.Image, filepath.Join(workspaceAnalyzePath(a.dir), e.Image)
 			}
 		case kindDocument:
-			return fmt.Sprintf("error: `%s` stands for %d page images; mark a single one by its derived name (e.g. `%s`)", name, len(e.Pages), firstOf(e.Pages))
+			if len(e.Pages) == 0 {
+				return fmt.Sprintf("error: `%s` has no page images", name)
+			}
+			return fmt.Sprintf("error: `%s` stands for %d page images; mark a single one by its derived name (e.g. `%s`)", name, len(e.Pages), e.Pages[0])
 		case kindVideo:
-			return fmt.Sprintf("error: `%s` stands for %d frame images; mark a single one by its derived name (e.g. `%s`)", name, len(e.Frames), firstOf(e.Frames))
+			if len(e.Frames) == 0 {
+				return fmt.Sprintf("error: `%s` has no frame images", name)
+			}
+			return fmt.Sprintf("error: `%s` stands for %d frame images; mark a single one by its derived name (e.g. `%s`)", name, len(e.Frames), e.Frames[0])
 		default:
 			return fmt.Sprintf("error: `%s` has no image form", name)
 		}
@@ -1135,15 +1154,6 @@ func (a *analyzeAgent) toolMarkImage(name string) string {
 	}
 	a.digestImages[product] = true
 	return fmt.Sprintf("marked `%s` as digest image %d/%d", product, len(a.digestImages), analyzeDigestMaxImages)
-}
-
-// firstOf returns the first element of a non-empty list, or "" for an empty
-// one (a document or video entry with no derived images).
-func firstOf(list []string) string {
-	if len(list) == 0 {
-		return ""
-	}
-	return list[0]
 }
 
 // runTool executes one tool call and returns the tool reply plus any extra
@@ -1321,6 +1331,8 @@ func (a *analyzeAgent) chat(ctx context.Context, messages []chatMessage, tools [
 
 // unmarshalToolArgs accepts both a JSON object and a JSON string containing
 // an object (OpenAI-compatible APIs disagree on tool-call argument encoding).
+// An empty arguments string decodes to an empty object: some endpoints send
+// "" for a parameterless function like finish.
 func unmarshalToolArgs(raw json.RawMessage, dest any) error {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
@@ -1333,7 +1345,7 @@ func unmarshalToolArgs(raw json.RawMessage, dest any) error {
 		}
 		raw = bytes.TrimSpace([]byte(s))
 		if len(raw) == 0 {
-			return errors.New("empty")
+			raw = []byte("{}")
 		}
 	}
 	return json.Unmarshal(raw, dest)

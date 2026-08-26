@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,7 +52,14 @@ func defaultRunCmd(ctx context.Context, name string, args ...string) ([]byte, er
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Env = append(os.Environ(), "HOME="+os.TempDir(), "SAL_USE_VCLPLUGIN=svp")
+	// Point HOME at the temp dir (soffice writes a profile there) without
+	// duplicating keys: an appended HOME= would be shadowed by the inherited
+	// one, since getenv returns the first match.
+	env := os.Environ()
+	env = slices.DeleteFunc(env, func(kv string) bool {
+		return strings.HasPrefix(kv, "HOME=") || strings.HasPrefix(kv, "SAL_USE_VCLPLUGIN=")
+	})
+	cmd.Env = append(env, "HOME="+os.TempDir(), "SAL_USE_VCLPLUGIN=svp")
 	err := cmd.Run()
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())

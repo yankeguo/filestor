@@ -56,10 +56,18 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /upload/analyze", s.requireAuth(http.HandlerFunc(s.handleUploadAnalyze)))
 	mux.Handle("POST /upload/push", s.requireAuth(http.HandlerFunc(s.handleUploadPush)))
 	mux.Handle("GET /upload/events", s.requireAuth(http.HandlerFunc(s.handleUploadEvents)))
-	return withSecurityHeaders(mux)
+	return s.withSecurityHeaders(mux)
 }
 
-func withSecurityHeaders(next http.Handler) http.Handler {
+func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
+	imgSrc := "img-src 'self' data: https:"
+	mediaSrc := "media-src 'self' https:"
+	if s.Config != nil && strings.HasPrefix(s.Config.S3.Endpoint, "http://") {
+		// A plain-http object store (e.g. local MinIO) can only render
+		// previews if images and media may load over http too.
+		imgSrc += " http:"
+		mediaSrc += " http:"
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
@@ -71,8 +79,8 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 			"script-src 'self' https://cdn.jsdelivr.net",
 			"style-src https://cdn.jsdelivr.net 'unsafe-inline'",
 			"font-src https://cdn.jsdelivr.net",
-			"img-src 'self' data: https:",
-			"media-src 'self' https:",
+			imgSrc,
+			mediaSrc,
 			"connect-src 'self'",
 			"form-action 'self'",
 			"base-uri 'none'",

@@ -127,14 +127,16 @@ func (s *Server) handleUploadPush(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "prefix": prefix + "/", "id": id})
 }
 
-// runPush uploads .meta.json then every staged file to the bucket under
-// prefix, then records the bundle in the monthly index (rewriting the bucket
-// file and updating the in-memory copy). Staged files are only removed from
-// the workspace once the index write lands, so a failed push leaves the whole
-// batch staged for a retry instead of orphaning the bundle. The first failure
-// stops the job and keeps everything staged. job is owned by this goroutine
-// alone (the progressReader callback runs inside store.Put on the same
-// goroutine), so it needs no locking.
+// runPush uploads every staged file to the bucket under prefix, then the
+// analyze run's digest marks into the bundle's .digest directory, then
+// .meta.json, and finally records the bundle in the monthly index (rewriting
+// the bucket file and updating the in-memory copy). .meta.json is written
+// last so an interrupted job leaves no discoverable bundle behind. Staged
+// files are only removed from the workspace once the index write lands, so a
+// failed push leaves the whole batch staged for a retry instead of orphaning
+// the bundle. The first failure stops the job and keeps everything staged.
+// job is owned by this goroutine alone (the progressReader callback runs
+// inside store.Put on the same goroutine), so it needs no locking.
 func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, meta bundleMeta) {
 	defer s.release(lockPush)
 	defer func() {
@@ -149,15 +151,20 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 			job.TotalBytes += info.Size()
 		}
 	}
-	// Digest marks (when an analyze run made any) count towards the byte
-	// total too; they are uploaded into the bundle's .digest directory below.
+	// The analyze run's digest marks ride along into the bundle's .digest
+	// directory; a missing directory just means there was nothing to mark.
+	var digest []string
 	if entries, err := os.ReadDir(workspaceDigestPath(dir)); err == nil {
 		for _, e := range entries {
-			if info, err := e.Info(); err == nil && info.Mode().IsRegular() {
-				job.TotalBytes += info.Size()
+			info, err := e.Info()
+			if err != nil || !info.Mode().IsRegular() {
+				continue
 			}
+			digest = append(digest, e.Name())
+			job.TotalBytes += info.Size()
 		}
 	}
+	job.Total += len(digest)
 	s.emitProgress(job, false)
 	raw, err := json.Marshal(meta)
 	if err != nil {
@@ -165,47 +172,36 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 		s.emitFail(job)
 		return
 	}
-	if err := s.store.Put(prefix+"/"+bundleMetaName, bytes.NewReader(raw), int64(len(raw))); err != nil {
-		log.Println("push meta:", err)
-		job.Error = fmt.Sprintf("%s: %v (bundle %s)", bundleMetaName, err, prefix)
+	fail := func(name string, err error) {
+		log.Println("push:", err)
+		job.Error = fmt.Sprintf("%s: %v (bundle %s)", name, err, prefix)
 		s.emitFail(job)
-		return
+		s.emitFiles()
 	}
 	for _, name := range names {
 		job.File = name
 		s.emitProgress(job, false)
 		if err := s.pushOne(&job, filepath.Join(dir, name), prefix+"/"+name); err != nil {
-			log.Println("push:", err)
-			job.Error = fmt.Sprintf("%s: %v (bundle %s)", name, err, prefix)
-			s.emitFail(job)
-			s.emitFiles()
+			fail(name, err)
 			return
 		}
 		job.Done++
 		s.emitProgress(job, false)
-		s.emitFiles()
 	}
-	// The analyze run's digest marks ride along into the bundle's .digest
-	// directory; a missing directory just means there was nothing to mark.
-	// Like any file failure, a failed digest upload stops the job before the
-	// index write so a retry can start over.
-	if entries, err := os.ReadDir(workspaceDigestPath(dir)); err == nil {
-		for _, e := range entries {
-			if !e.Type().IsRegular() {
-				continue
-			}
-			name := e.Name()
-			job.File = bundleDigestDir + "/" + name
-			s.emitProgress(job, false)
-			if err := s.pushOne(&job, filepath.Join(workspaceDigestPath(dir), name), prefix+"/"+bundleDigestDir+"/"+name); err != nil {
-				log.Println("push digest:", err)
-				job.Error = fmt.Sprintf("%s: %v (bundle %s)", job.File, err, prefix)
-				s.emitFail(job)
-				s.emitFiles()
-				return
-			}
+	for _, name := range digest {
+		job.File = bundleDigestDir + "/" + name
+		s.emitProgress(job, false)
+		if err := s.pushOne(&job, filepath.Join(workspaceDigestPath(dir), name), prefix+"/"+bundleDigestDir+"/"+name); err != nil {
+			fail(job.File, err)
+			return
 		}
-		job.File = ""
+		job.Done++
+		s.emitProgress(job, false)
+	}
+	// The bundle is complete: publish its meta, then record it in the index.
+	if err := s.store.Put(prefix+"/"+bundleMetaName, bytes.NewReader(raw), int64(len(raw))); err != nil {
+		fail(bundleMetaName, err)
+		return
 	}
 	if err := s.index.append(s.store, meta); err != nil {
 		log.Println("push index:", err)

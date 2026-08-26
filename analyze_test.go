@@ -1369,3 +1369,26 @@ func TestRenameFileToolRenamesDerived(t *testing.T) {
 	require.Contains(t, label, "1 page(s) of `invoice-2026-03.pdf`")
 	require.Len(t, imgs, 1)
 }
+
+func TestRunToolReadsClosed(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
+	a := newTestAgent(t, dir, []*analyzeEntry{{Name: "a.txt", Kind: kindText}})
+	a.readsClosed = true
+
+	// The wrap-up round offers no read tools; calling one anyway is refused.
+	for _, tool := range []string{"read_file", "load_media", "rename_file"} {
+		reply, _ := a.runTool(context.Background(), chatToolCall{
+			ID: "c1", Type: "function",
+			Function: chatFunctionCall{Name: tool, Arguments: json.RawMessage(`{"name":"a.txt","new_name":"b.txt"}`)},
+		})
+		require.Contains(t, reply.Content, "reading is closed", tool)
+	}
+
+	// The output tools still work while reads are closed.
+	reply, _ := a.runTool(context.Background(), chatToolCall{
+		ID: "c2", Type: "function",
+		Function: chatFunctionCall{Name: "mark_text", Arguments: json.RawMessage(`{"text":"chunk"}`)},
+	})
+	require.Equal(t, "marked text chunk 1/16", reply.Content)
+}
