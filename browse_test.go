@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +39,8 @@ type fakeStore struct {
 	putBlock chan struct{}
 	putsMu   sync.Mutex
 	puts     []putCall
+	objects  map[string][]byte
+	getFn    func(key string) ([]byte, error)
 }
 
 func (f *fakeStore) List(prefix, marker string) (ListPage, error) {
@@ -48,9 +53,41 @@ func (f *fakeStore) List(prefix, marker string) (ListPage, error) {
 	return f.page, f.err
 }
 
-// lastListCall returns the most recent List call (which month finished last
-// is nondeterministic for the year fan-out, so calendar tests must not rely
-// on it).
+func (f *fakeStore) ListKeys(prefix string) ([]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.putsMu.Lock()
+	defer f.putsMu.Unlock()
+	var keys []string
+	for k := range f.objects {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	return keys, nil
+}
+
+func (f *fakeStore) Get(key string) ([]byte, error) {
+	if f.getFn != nil {
+		return f.getFn(key)
+	}
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.putsMu.Lock()
+	defer f.putsMu.Unlock()
+	if f.objects != nil {
+		if b, ok := f.objects[key]; ok {
+			return append([]byte(nil), b...), nil
+		}
+	}
+	return nil, errNotFound
+}
+
+// lastListCall returns the most recent List call (only meaningful for tests
+// that trigger exactly one List).
 func (f *fakeStore) lastListCall() [2]string {
 	f.listMu.Lock()
 	defer f.listMu.Unlock()
@@ -95,6 +132,10 @@ func (f *fakeStore) Put(key string, r io.Reader, size int64) error {
 	}
 	f.putsMu.Lock()
 	f.puts = append(f.puts, putCall{Key: key, Data: b})
+	if f.objects == nil {
+		f.objects = map[string][]byte{}
+	}
+	f.objects[key] = b
 	f.putsMu.Unlock()
 	return nil
 }
@@ -108,6 +149,29 @@ func (f *fakeStore) putKeys() []string {
 	}
 	return keys
 }
+
+func mustIndexJSON(t *testing.T, entries ...bundleMeta) []byte {
+	t.Helper()
+	b, err := json.Marshal(entries)
+	require.NoError(t, err)
+	return b
+}
+
+func mustMetaJSON(t *testing.T, meta bundleMeta) []byte {
+	t.Helper()
+	b, err := json.Marshal(meta)
+	require.NoError(t, err)
+	return b
+}
+
+const (
+	testBundleID1 = "550e8400-e29b-41d4-a716-446655440000"
+	testBundleID2 = "a1b2c3d4-e5f6-4789-abcd-ef0123456789"
+	testBundleID3 = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	testBundleID4 = "11111111-2222-4333-8444-555555555555"
+	testBundleID5 = "22222222-3333-4444-8555-666666666666"
+	testBundleID6 = "33333333-4444-4555-8666-777777777777"
+)
 
 func TestBrowseCalendarLanding(t *testing.T) {
 	h := NewServer(testCfg(), &fakeStore{}).Handler()
@@ -126,16 +190,12 @@ func TestBrowseCalendarLanding(t *testing.T) {
 }
 
 func TestBrowseCalendarHighlightsAndListsDay(t *testing.T) {
-	store := &fakeStore{listFn: func(prefix, marker string) (ListPage, error) {
-		if prefix != "2026/08/" {
-			return ListPage{}, nil
-		}
-		return ListPage{Prefixes: []string{
-			"2026/08/202608240659-weekly-report/",
-			"2026/08/202608241200-monthly-billing/",
-			"2026/08/202608101015-发票/",
-			"2026/08/legacy-dir/",
-		}}, nil
+	store := &fakeStore{objects: map[string][]byte{
+		"index/2026/2026-08.json": mustIndexJSON(t,
+			bundleMeta{ID: testBundleID1, Title: "weekly-report", Time: "2026-08-24T06:59"},
+			bundleMeta{ID: testBundleID2, Title: "monthly-billing", Time: "2026-08-24T12:00"},
+			bundleMeta{ID: testBundleID3, Title: "发票", Time: "2026-08-10T10:15"},
+		),
 	}}
 	h := NewServer(testCfg(), store).Handler()
 	cookie := loginCookie(t, h)
@@ -150,8 +210,6 @@ func TestBrowseCalendarHighlightsAndListsDay(t *testing.T) {
 	// Days with bundles link back to the day view, anchored to the year list.
 	require.Contains(t, body, `/browse?month=2026-08&day=2026-08-24#day-2026-08-24`)
 	require.Contains(t, body, `day=2026-08-10#day-2026-08-10`)
-	// Non-conforming directories are not counted.
-	require.NotContains(t, body, "legacy-dir")
 	// The year list groups every day of the year with parsed time and title.
 	require.Contains(t, body, `id="day-2026-08-24"`)
 	require.Contains(t, body, `id="day-2026-08-10"`)
@@ -159,7 +217,7 @@ func TestBrowseCalendarHighlightsAndListsDay(t *testing.T) {
 	require.Contains(t, body, "weekly-report")
 	require.Contains(t, body, "12:00")
 	require.Contains(t, body, "monthly-billing")
-	require.Contains(t, body, `/browse?prefix=2026%2f08%2f202608240659-weekly-report%2f`)
+	require.Contains(t, body, `/browse?prefix=content%2f55%2f0e%2f550e8400-e29b-41d4-a716-446655440000%2f`)
 	// Other days of the year appear too (not only the selected one).
 	require.Contains(t, body, "10:15")
 	require.Contains(t, body, "发票")
@@ -181,25 +239,12 @@ func TestBrowseCalendarDayOutsideMonthDropped(t *testing.T) {
 	require.Contains(t, body, "No bundles this year.")
 }
 
-func TestBrowseCalendarFollowsPagination(t *testing.T) {
-	type call struct{ prefix, marker string }
-	var mu sync.Mutex
-	var calls []call
-	store := &fakeStore{listFn: func(prefix, marker string) (ListPage, error) {
-		mu.Lock()
-		calls = append(calls, call{prefix, marker})
-		mu.Unlock()
-		if prefix != "2026/08/" {
-			return ListPage{}, nil
-		}
-		if marker == "" {
-			return ListPage{
-				Prefixes:    []string{"2026/08/202608011200-a/"},
-				IsTruncated: true,
-				NextMarker:  "2026/08/202608011200-a/",
-			}, nil
-		}
-		return ListPage{Prefixes: []string{"2026/08/202608311200-b/"}}, nil
+func TestBrowseCalendarMissingMonthsAreEmpty(t *testing.T) {
+	store := &fakeStore{objects: map[string][]byte{
+		"index/2026/2026-08.json": mustIndexJSON(t,
+			bundleMeta{ID: testBundleID4, Title: "a", Time: "2026-08-01T12:00"},
+			bundleMeta{ID: testBundleID5, Title: "b", Time: "2026-08-31T12:00"},
+		),
 	}}
 	h := NewServer(testCfg(), store).Handler()
 	cookie := loginCookie(t, h)
@@ -211,37 +256,18 @@ func TestBrowseCalendarFollowsPagination(t *testing.T) {
 	body := rec.Body.String()
 	require.Contains(t, body, "day=2026-08-01")
 	require.Contains(t, body, "day=2026-08-31")
-	// Pagination resumes from the last listed prefix; the year fan-out lists
-	// every other month once, without a marker.
-	require.Contains(t, calls, call{"2026/08/", ""})
-	require.Contains(t, calls, call{"2026/08/", "2026/08/202608011200-a/"})
-	for _, c := range calls {
-		if c.prefix != "2026/08/" {
-			require.Empty(t, c.marker, c.prefix)
-		}
-	}
-}
-
-func TestSplitDayDir(t *testing.T) {
-	hm, title := splitDayDir("202608240659-weekly-report")
-	require.Equal(t, "06:59", hm)
-	require.Equal(t, "weekly-report", title)
-
-	hm, title = splitDayDir("legacy-dir")
-	require.Equal(t, "", hm)
-	require.Equal(t, "legacy-dir", title)
 }
 
 func TestBuildBrowseCalendarGrid(t *testing.T) {
 	// August 2026 starts on a Saturday and has 31 days.
 	month := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.Local)
-	yearDirs := []string{
-		"2026/07/202607101200-y/",
-		"2026/08/202608240659-x/",
-		"2026/08/legacy-dir/",
+	yearBundles := []bundleMeta{
+		{ID: testBundleID4, Title: "y", Time: "2026-07-10T12:00"},
+		{ID: testBundleID1, Title: "x", Time: "2026-08-24T06:59"},
+		{ID: "not-a-uuid", Title: "skip", Time: "2026-08-10T00:00"},
 	}
-	d := buildBrowseCalendar(month, now, yearDirs, now)
+	d := buildBrowseCalendar(month, now, yearBundles, now)
 	require.Equal(t, "2026-08", d.Month)
 	require.Equal(t, "2026-07", d.PrevMonth)
 	require.Equal(t, "2026-09", d.NextMonth)
@@ -259,7 +285,7 @@ func TestBuildBrowseCalendarGrid(t *testing.T) {
 	require.True(t, sel.Selected)
 	require.True(t, sel.Today)
 	require.Equal(t, 1, sel.Bundles)
-	// Only the month's own dirs count towards the calendar cells.
+	// Only the month's own entries count towards the calendar cells.
 	for _, week := range d.Weeks {
 		for _, day := range week {
 			if day.Day == 10 {
@@ -270,8 +296,8 @@ func TestBuildBrowseCalendarGrid(t *testing.T) {
 	// The year list groups every day of the year, newest first; the selected
 	// (also today) group is flagged.
 	require.Equal(t, []calDayGroup{
-		{Date: "2026-08-24", Bundles: []calDir{{Time: "06:59", Title: "x", Prefix: "2026/08/202608240659-x/"}}, Selected: true, Today: true},
-		{Date: "2026-07-10", Bundles: []calDir{{Time: "12:00", Title: "y", Prefix: "2026/07/202607101200-y/"}}},
+		{Date: "2026-08-24", Bundles: []calDir{{Time: "06:59", Title: "x", Prefix: bundlePrefix(testBundleID1) + "/"}}, Selected: true, Today: true},
+		{Date: "2026-07-10", Bundles: []calDir{{Time: "12:00", Title: "y", Prefix: bundlePrefix(testBundleID4) + "/"}}},
 	}, d.DayGroups)
 	require.False(t, d.SelectedMissing)
 }
@@ -280,35 +306,42 @@ func TestBuildBrowseCalendarSelectedMissing(t *testing.T) {
 	month := time.Date(2026, 8, 1, 0, 0, 0, 0, time.Local)
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.Local)
 	selected := time.Date(2026, 8, 10, 0, 0, 0, 0, time.Local)
-	d := buildBrowseCalendar(month, selected, []string{"2026/08/202608240659-x/"}, now)
+	d := buildBrowseCalendar(month, selected, []bundleMeta{
+		{ID: testBundleID1, Title: "x", Time: "2026-08-24T06:59"},
+	}, now)
 	require.Equal(t, "2026-08-10", d.SelectedDay)
 	require.True(t, d.SelectedMissing)
 }
 
-func TestListYearDirs(t *testing.T) {
-	store := &fakeStore{listFn: func(prefix, marker string) (ListPage, error) {
-		switch prefix {
-		case "2026/03/":
-			return ListPage{Prefixes: []string{"2026/03/202603011200-a/"}}, nil
-		case "2026/11/":
-			return ListPage{Prefixes: []string{"2026/11/202611022359-b/", "2026/11/202611030100-c/"}}, nil
-		default:
-			return ListPage{}, nil
-		}
+func TestBrowseCalendarReadsMemoryIndex(t *testing.T) {
+	// The calendar is served from the in-memory index loaded at startup, so
+	// it must not List or Get anything per request.
+	store := &fakeStore{objects: map[string][]byte{
+		"index/2026/2026-03.json": mustIndexJSON(t,
+			bundleMeta{ID: testBundleID4, Title: "a", Time: "2026-03-01T12:00"},
+		),
+		"index/2026/2026-11.json": mustIndexJSON(t,
+			bundleMeta{ID: testBundleID5, Title: "b", Time: "2026-11-02T23:59"},
+			bundleMeta{ID: testBundleID6, Title: "c", Time: "2026-11-03T01:00"},
+		),
 	}}
-	dirs, err := listYearDirs(store, 2026)
-	require.NoError(t, err)
-	// Months concatenate in calendar order.
-	require.Equal(t, []string{
-		"2026/03/202603011200-a/",
-		"2026/11/202611022359-b/",
-		"2026/11/202611030100-c/",
-	}, dirs)
-
+	h := NewServer(testCfg(), store).Handler()
+	cookie := loginCookie(t, h)
 	store.err = errors.New("boom")
-	store.listFn = nil
-	_, err = listYearDirs(store, 2026)
-	require.Error(t, err)
+	store.getFn = func(string) ([]byte, error) { return nil, errors.New("boom") }
+
+	req := httptest.NewRequest(http.MethodGet, "/browse?month=2026-11", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	// All three indexed days of the year are listed from memory.
+	require.Contains(t, body, `id="day-2026-03-01"`)
+	require.Contains(t, body, `id="day-2026-11-02"`)
+	require.Contains(t, body, `id="day-2026-11-03"`)
+	// The displayed month's own days are highlighted in the calendar grid.
+	require.Contains(t, body, `/browse?month=2026-11&day=2026-11-02#day-2026-11-02`)
 }
 
 func TestBrowsePrefixAndParent(t *testing.T) {
@@ -346,29 +379,36 @@ func TestBrowseNextPage(t *testing.T) {
 }
 
 func TestBrowseBundleView(t *testing.T) {
-	store := &fakeStore{page: ListPage{Objects: []ObjectInfo{
-		{Key: "2026/08/202608240659-weekly-report/photo.jpg", Size: 1024},
-		{Key: "2026/08/202608240659-weekly-report/clip.mp4", Size: 2048},
-		{Key: "2026/08/202608240659-weekly-report/voice.mp3", Size: 512},
-		{Key: "2026/08/202608240659-weekly-report/notes.pdf", Size: 512},
-	}}}
+	prefix := bundlePrefix(testBundleID1) + "/"
+	meta := bundleMeta{ID: testBundleID1, Title: "weekly-report", Time: "2026-08-24T06:59"}
+	store := &fakeStore{
+		page: ListPage{Objects: []ObjectInfo{
+			{Key: prefix + bundleMetaName, Size: 64},
+			{Key: prefix + "photo.jpg", Size: 1024},
+			{Key: prefix + "clip.mp4", Size: 2048},
+			{Key: prefix + "voice.mp3", Size: 512},
+			{Key: prefix + "notes.pdf", Size: 512},
+		}},
+		objects: map[string][]byte{bundleMetaKey(testBundleID1): mustMetaJSON(t, meta)},
+	}
 	h := NewServer(testCfg(), store).Handler()
 	cookie := loginCookie(t, h)
 
-	req := httptest.NewRequest(http.MethodGet, "/browse?prefix=2026/08/202608240659-weekly-report/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/browse?prefix="+prefix, nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, "2026/08/202608240659-weekly-report/", store.lastListCall()[0])
+	require.Equal(t, prefix, store.lastListCall()[0])
 	body := rec.Body.String()
-	// Dedicated header: parsed title, date and time, back link to the day.
+	// Dedicated header: title, date and time from .meta.json, back link to the day.
 	require.Contains(t, body, "<h4 class=\"mb-1\">weekly-report</h4>")
 	require.Contains(t, body, "2026-08-24")
 	require.Contains(t, body, "06:59")
 	require.Contains(t, body, `/browse?month=2026-08&day=2026-08-24`)
-	// Stats line.
+	// Stats line; .meta.json is omitted.
 	require.Contains(t, body, "4 files")
+	require.NotContains(t, body, bundleMetaName)
 	// Inline previews for browser-native media, signed via the store.
 	require.Contains(t, body, "<img")
 	require.Contains(t, body, "<video")
@@ -376,19 +416,24 @@ func TestBrowseBundleView(t *testing.T) {
 	require.Contains(t, body, "example.oss-cn-hangzhou.aliyuncs.com/preview/")
 	// Non-previewable files keep a typed icon and download-only row.
 	require.Contains(t, body, "bi-file-earmark-pdf")
-	require.Contains(t, body, `/download?key=2026%2f08%2f202608240659-weekly-report%2fnotes.pdf`)
+	require.Contains(t, body, `/download?key=content%2f55%2f0e%2f550e8400-e29b-41d4-a716-446655440000%2fnotes.pdf`)
 	// The generic breadcrumbs view is not rendered.
 	require.NotContains(t, body, "breadcrumb")
 }
 
 func TestBrowseBundleViewSkipsOversizedImagePreview(t *testing.T) {
-	store := &fakeStore{page: ListPage{Objects: []ObjectInfo{
-		{Key: "2026/08/202608240659-x/big.jpg", Size: imagePreviewMaxSize + 1},
-	}}}
+	prefix := bundlePrefix(testBundleID1) + "/"
+	meta := bundleMeta{ID: testBundleID1, Title: "x", Time: "2026-08-24T06:59"}
+	store := &fakeStore{
+		page: ListPage{Objects: []ObjectInfo{
+			{Key: prefix + "big.jpg", Size: imagePreviewMaxSize + 1},
+		}},
+		objects: map[string][]byte{bundleMetaKey(testBundleID1): mustMetaJSON(t, meta)},
+	}
 	h := NewServer(testCfg(), store).Handler()
 	cookie := loginCookie(t, h)
 
-	req := httptest.NewRequest(http.MethodGet, "/browse?prefix=2026/08/202608240659-x/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/browse?prefix="+prefix, nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -398,22 +443,39 @@ func TestBrowseBundleViewSkipsOversizedImagePreview(t *testing.T) {
 	require.Contains(t, body, "bi-file-earmark-image")
 }
 
-func TestParseBundlePrefix(t *testing.T) {
-	date, hm, title, ok := parseBundlePrefix("2026/08/202608240659-weekly-report/")
+func TestBrowseBundleViewWithoutMetaIsContents(t *testing.T) {
+	prefix := bundlePrefix(testBundleID1) + "/"
+	store := &fakeStore{page: ListPage{Objects: []ObjectInfo{
+		{Key: prefix + "notes.pdf", Size: 512},
+	}}}
+	h := NewServer(testCfg(), store).Handler()
+	cookie := loginCookie(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/browse?prefix="+prefix, nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "breadcrumb")
+	require.NotContains(t, body, "<h4 class=\"mb-1\">")
+}
+
+func TestParseBundleID(t *testing.T) {
+	id, ok := parseBundleID("content/55/0e/550e8400-e29b-41d4-a716-446655440000/")
 	require.True(t, ok)
-	require.Equal(t, "2026-08-24", date)
-	require.Equal(t, "06:59", hm)
-	require.Equal(t, "weekly-report", title)
+	require.Equal(t, testBundleID1, id)
 
 	for _, p := range []string{
 		"",
 		"docs/",
-		"2026/08/",
-		"2026/08/legacy-dir/",
-		"2026/08/202608240659-x/extra/",
-		"2x26/08/202608240659-x/",
+		"content/",
+		"content/55/0e/",
+		"bundles/55/0e/550e8400-e29b-41d4-a716-446655440000/",
+		"content/55/0f/550e8400-e29b-41d4-a716-446655440000/",
+		"content/55/0e/550e8400-e29b-41d4-a716-446655440000/extra/",
+		"2026/08/202608240659-weekly-report/",
 	} {
-		_, _, _, ok := parseBundlePrefix(p)
+		_, ok := parseBundleID(p)
 		require.False(t, ok, p)
 	}
 }
@@ -501,7 +563,7 @@ func TestDownloadRequiresLogin(t *testing.T) {
 func TestBrowseListError(t *testing.T) {
 	h := NewServer(testCfg(), &fakeStore{err: fmt.Errorf("boom")}).Handler()
 	cookie := loginCookie(t, h)
-	req := httptest.NewRequest(http.MethodGet, "/browse", nil)
+	req := httptest.NewRequest(http.MethodGet, "/browse?prefix=docs", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

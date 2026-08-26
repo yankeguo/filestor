@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -66,12 +68,6 @@ func sanitizePushTitle(s string) (string, error) {
 	return out, nil
 }
 
-// pushPrefix builds the bundle prefix YYYY/MM/YYYYMMDDhhmm-TITLE from the
-// picked wall-clock time.
-func pushPrefix(t time.Time, title string) string {
-	return t.Format("2006/01/200601021504") + "-" + title
-}
-
 func (s *Server) handleUploadPush(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
 		http.Error(w, "object store unavailable", http.StatusServiceUnavailable)
@@ -91,7 +87,14 @@ func (s *Server) handleUploadPush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid title", http.StatusBadRequest)
 		return
 	}
-	prefix := pushPrefix(when, title)
+	id, err := newUUIDv4()
+	if err != nil {
+		log.Println("uuid:", err)
+		http.Error(w, "id failed", http.StatusInternalServerError)
+		return
+	}
+	prefix := bundlePrefix(id)
+	meta := bundleMeta{ID: id, Title: title, Time: when.Format(pushTimeLayout)}
 	dir := s.workspaceDir()
 	files, err := listWorkspaceFiles(dir)
 	if err != nil {
@@ -120,16 +123,18 @@ func (s *Server) handleUploadPush(w http.ResponseWriter, r *http.Request) {
 	}
 	job := jobProgress{Kind: lockPush, Prefix: prefix + "/", Total: len(names)}
 	s.emitProgress(job, false)
-	go s.runPush(job, dir, prefix, names)
-	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "prefix": prefix + "/"})
+	go s.runPush(job, dir, prefix, names, meta)
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "prefix": prefix + "/", "id": id})
 }
 
-// runPush uploads every staged file to the bucket under prefix, removing each file
-// from the workspace once it lands. The first failure stops the job and keeps
-// the remaining files staged. job is owned by this goroutine alone (the
-// progressReader callback runs inside store.Put on the same goroutine), so it
-// needs no locking.
-func (s *Server) runPush(job jobProgress, dir, prefix string, names []string) {
+// runPush uploads .meta.json then every staged file to the bucket under prefix,
+// removing each staged file from the workspace once it lands. After all files
+// succeed it records the bundle in the monthly index (rewriting the bucket
+// file and updating the in-memory copy). The first failure stops
+// the job and keeps the remaining files staged. job is owned by this goroutine
+// alone (the progressReader callback runs inside store.Put on the same
+// goroutine), so it needs no locking.
+func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, meta bundleMeta) {
 	defer s.release(lockPush)
 	log.Printf("push started: %s (%d files)", prefix, len(names))
 	for _, name := range names {
@@ -138,6 +143,18 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string) {
 		}
 	}
 	s.emitProgress(job, false)
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		job.Error = err.Error()
+		s.emitFail(job)
+		return
+	}
+	if err := s.store.Put(prefix+"/"+bundleMetaName, bytes.NewReader(raw), int64(len(raw))); err != nil {
+		log.Println("push meta:", err)
+		job.Error = fmt.Sprintf("%s: %v", bundleMetaName, err)
+		s.emitFail(job)
+		return
+	}
 	for _, name := range names {
 		job.File = name
 		s.emitProgress(job, false)
@@ -154,6 +171,13 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string) {
 		job.Done++
 		s.emitProgress(job, false)
 		s.emitFiles()
+	}
+	if err := s.index.append(s.store, meta); err != nil {
+		log.Println("push index:", err)
+		job.Error = fmt.Sprintf("index: %v", err)
+		s.emitFail(job)
+		s.emitFiles()
+		return
 	}
 	clearWorkspaceStateIfEmpty(dir)
 	job.File = ""
