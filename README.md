@@ -5,7 +5,7 @@ Cookie-authenticated browser for one S3-compatible bucket (Aliyun OSS, Qcloud CO
 ## Features
 
 - Standard `net/http` server
-- YAML config: `admin.{username,password}`, `s3.{endpoint,region,bucket,access_key_id,secret_access_key}` (+ optional `s3.force_path_style`), optional `upload.workspace` and `llm.{url,model,effort,headers}` (+ optional `llm.embeddings.{url,model,headers,dimensions}`; url/model/headers fall back to their `llm`-level counterparts)
+- YAML config: `admin.{username,password}`, `s3.{endpoint,region,bucket,access_key_id,secret_access_key}` (+ optional `s3.force_path_style`), optional `upload.workspace`, `llm.chat.{url,model,effort,headers}` and `llm.embeddings.{url,model,headers,dimensions}`
 - Cookie login (HMAC, HttpOnly, SameSite=Lax)
 - Calendar browse at `/browse`: monthly grid (weeks start Monday, sticky on scroll) with days holding bundles highlighted, next to a list of every bundle day of the year (newest first, `#day-YYYY-MM-DD` anchors, scrolled to the selected day); click a bundle through to a dedicated bundle view (title/date header, file stats, image gallery and video/audio players via inline presigned URLs)
 - `GET /download` 302s to a 5-minute presigned GET URL (`Content-Disposition: attachment`); `GET /preview` signs without it for inline rendering
@@ -63,11 +63,12 @@ s3:
 upload:
   workspace: upload-workspace
 # llm:
-#   url: https://api.example.com/v1/chat/completions
-#   model: my-model
-#   effort: medium
-#   headers:
-#     Authorization: Bearer REPLACE_ME
+#   chat:
+#     url: https://api.example.com/v1/chat/completions
+#     model: my-model
+#     effort: medium
+#     headers:
+#       Authorization: Bearer REPLACE_ME
 #   embeddings:
 #     url: https://api.example.com/v1/embeddings
 #     model: my-embedding-model
@@ -76,7 +77,7 @@ upload:
 #       Authorization: Bearer REPLACE_ME
 ```
 
-All of `admin.username`, `admin.password`, and `s3.{endpoint,region,bucket,access_key_id,secret_access_key}` are required; `s3.force_path_style` is optional (needed by MinIO-style vendors). Any S3-compatible storage works — Aliyun OSS (use its S3-compatible endpoint `https://s3.oss-{region}.aliyuncs.com`), Qcloud COS (`https://cos.{region}.myqcloud.com`), AWS S3, MinIO, etc. `endpoint` may omit `https://`; it is added on load. `upload.workspace` defaults to `upload-workspace` (relative to the process working directory; in the container that is `/upload-workspace`). `llm.{url,model,effort,headers}` is an optional OpenAI-compatible endpoint used by file analysis on `/upload`; `url` and `model` must be set together, `effort` is the model's reasoning effort, and `headers` is an optional map of extra HTTP headers (e.g. `Authorization`). `llm.embeddings.{url,model,headers}` is an optional OpenAI-compatible embeddings endpoint; each field falls back to its `llm`-level counterpart when unset, plus an optional embeddings-only `dimensions`. Do not commit `config.yaml`.
+All of `admin.username`, `admin.password`, and `s3.{endpoint,region,bucket,access_key_id,secret_access_key}` are required; `s3.force_path_style` is optional (needed by MinIO-style vendors). Any S3-compatible storage works — Aliyun OSS (use its S3-compatible endpoint `https://s3.oss-{region}.aliyuncs.com`), Qcloud COS (`https://cos.{region}.myqcloud.com`), AWS S3, MinIO, etc. `endpoint` may omit `https://`; it is added on load. `upload.workspace` defaults to `upload-workspace` (relative to the process working directory; in the container that is `/upload-workspace`). `llm.chat.{url,model,effort,headers}` is an optional OpenAI-compatible chat endpoint used by file analysis on `/upload`; `url` and `model` must be set together, `effort` is the model's reasoning effort, and `headers` is an optional map of extra HTTP headers (e.g. `Authorization`). `llm.embeddings.{url,model,headers,dimensions}` is an optional, independent OpenAI-compatible embeddings endpoint (no `chat` defaults); `url` and `model` must be set together and `dimensions` is optional. Do not commit `config.yaml`.
 
 ## Auth
 

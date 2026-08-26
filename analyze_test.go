@@ -102,7 +102,7 @@ func TestUploadAnalyzeNotConfigured(t *testing.T) {
 
 func TestUploadAnalyzeNoFiles(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
-	cfg.LLM = LLMConfig{URL: "http://127.0.0.1:1/", Model: "m"}
+	cfg.LLM.Chat = ChatConfig{URL: "http://127.0.0.1:1/", Model: "m"}
 	h := NewServer(cfg, &fakeStore{}).Handler()
 	cookie := loginCookie(t, h)
 	require.Equal(t, http.StatusBadRequest, postAnalyze(t, h, cookie).Code)
@@ -139,7 +139,7 @@ func TestUploadAnalyzeSuccess(t *testing.T) {
 			return ""
 		}
 	})
-	cfg.LLM = LLMConfig{URL: llm.URL, Model: "test-model", Effort: "high", Headers: map[string]string{"Authorization": "Bearer token"}}
+	cfg.LLM.Chat = ChatConfig{URL: llm.URL, Model: "test-model", Effort: "high", Headers: map[string]string{"Authorization": "Bearer token"}}
 
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
@@ -191,7 +191,7 @@ func TestUploadAnalyzeRename(t *testing.T) {
 			return ""
 		}
 	})
-	cfg.LLM = LLMConfig{URL: llm.URL, Model: "test-model"}
+	cfg.LLM.Chat = ChatConfig{URL: llm.URL, Model: "test-model"}
 
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
@@ -246,7 +246,7 @@ func TestUploadAnalyzeImageTool(t *testing.T) {
 			return ""
 		}
 	})
-	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	cfg.LLM.Chat = ChatConfig{URL: srv.URL, Model: "test-model"}
 
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
@@ -297,7 +297,7 @@ func TestUploadAnalyzeMultiImageRepliesStayConsecutive(t *testing.T) {
 			return ""
 		}
 	})
-	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	cfg.LLM.Chat = ChatConfig{URL: srv.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
@@ -318,7 +318,7 @@ func TestUploadAnalyzeTextAnswerFallback(t *testing.T) {
 		// The model never calls set_title and answers in plain text.
 		return `{"choices":[{"message":{"role":"assistant","content":"weekly-report"}}]}`
 	})
-	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	cfg.LLM.Chat = ChatConfig{URL: srv.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
@@ -337,7 +337,7 @@ func TestUploadAnalyzeNoTitle(t *testing.T) {
 		// Neither a tool call nor usable text: genuinely no title.
 		return `{"choices":[{"message":{"role":"assistant","content":""}}]}`
 	})
-	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	cfg.LLM.Chat = ChatConfig{URL: srv.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
@@ -372,7 +372,7 @@ func TestUploadAnalyzeRoundBudgetForcesDecision(t *testing.T) {
 		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 			`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"forced\"}"}}]}}]}`
 	})
-	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	cfg.LLM.Chat = ChatConfig{URL: srv.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
@@ -430,7 +430,7 @@ func TestUploadAnalyzePeeks(t *testing.T) {
 		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"q3-report\"}"}}]}}]}`
 	})
-	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	cfg.LLM.Chat = ChatConfig{URL: srv.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
@@ -483,7 +483,7 @@ func TestUploadAnalyzeObjectArguments(t *testing.T) {
 		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":{"title":"from-object"}}}]}}]}`
 	})
-	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	cfg.LLM.Chat = ChatConfig{URL: srv.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
@@ -527,7 +527,7 @@ func TestUploadAnalyzeSetDatetime(t *testing.T) {
 			return ""
 		}
 	})
-	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	cfg.LLM.Chat = ChatConfig{URL: srv.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
@@ -565,7 +565,7 @@ func TestUploadAnalyzeInvalidDatetimeKeepsPinnedTime(t *testing.T) {
 			return ""
 		}
 	})
-	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	cfg.LLM.Chat = ChatConfig{URL: srv.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
@@ -584,7 +584,7 @@ func TestUploadAnalyzeFailureKeepsUnanalyzed(t *testing.T) {
 		// Neither a tool call nor usable text: genuinely no title.
 		return `{"choices":[{"message":{"role":"assistant","content":""}}]}`
 	})
-	cfg.LLM = LLMConfig{URL: srv.URL, Model: "test-model"}
+	cfg.LLM.Chat = ChatConfig{URL: srv.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
@@ -603,7 +603,7 @@ func TestWorkspaceLockDuringAnalyze(t *testing.T) {
 		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"ok\"}"}}]}}]}`
 	})
-	cfg.LLM = LLMConfig{URL: llm.URL, Model: "test-model"}
+	cfg.LLM.Chat = ChatConfig{URL: llm.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
 	h := app.Handler()
 	cookie := loginCookie(t, h)
@@ -1098,7 +1098,7 @@ func TestUploadAnalyzeUpstreamFailureNotEchoed(t *testing.T) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			t.Cleanup(llm.Close)
-			cfg.LLM = LLMConfig{URL: llm.URL, Model: "m"}
+			cfg.LLM.Chat = ChatConfig{URL: llm.URL, Model: "m"}
 			app := NewServer(cfg, &fakeStore{})
 			h := app.Handler()
 			cookie := loginCookie(t, h)

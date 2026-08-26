@@ -44,43 +44,31 @@ func TestLoadConfigLLM(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
-  url: ' https://api.example.com/v1/chat/completions '
-  model: ' my-model '
-  effort: ' high '
-  headers:
-    Authorization: ' Bearer token '
-    X-Team: blue
+  chat:
+    url: ' https://api.example.com/v1/chat/completions '
+    model: ' my-model '
+    effort: ' high '
+    headers:
+      Authorization: ' Bearer token '
+      X-Team: blue
 `), 0o644))
 	cfg, err := loadConfig(path)
 	require.NoError(t, err)
-	require.Equal(t, "https://api.example.com/v1/chat/completions", cfg.LLM.URL)
-	require.Equal(t, "my-model", cfg.LLM.Model)
-	require.Equal(t, "high", cfg.LLM.Effort)
-	require.Equal(t, map[string]string{"Authorization": "Bearer token", "X-Team": "blue"}, cfg.LLM.Headers)
+	require.Equal(t, "https://api.example.com/v1/chat/completions", cfg.LLM.Chat.URL)
+	require.Equal(t, "my-model", cfg.LLM.Chat.Model)
+	require.Equal(t, "high", cfg.LLM.Chat.Effort)
+	require.Equal(t, map[string]string{"Authorization": "Bearer token", "X-Team": "blue"}, cfg.LLM.Chat.Headers)
 }
 
 func TestLoadConfigLLMEmbeddings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
-  url: https://api.example.com/v1/chat/completions
-  model: my-model
-  headers:
-    Authorization: Bearer token
-`), 0o644))
-	cfg, err := loadConfig(path)
-	require.NoError(t, err)
-	// Every embeddings field falls back to its llm-level counterpart.
-	require.Equal(t, "https://api.example.com/v1/chat/completions", cfg.LLM.Embeddings.URL)
-	require.Equal(t, "my-model", cfg.LLM.Embeddings.Model)
-	require.Equal(t, map[string]string{"Authorization": "Bearer token"}, cfg.LLM.Embeddings.Headers)
-	require.Zero(t, cfg.LLM.Embeddings.Dimensions)
-
-	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
-  url: https://api.example.com/v1/chat/completions
-  model: my-model
-  headers:
-    Authorization: Bearer token
+  chat:
+    url: https://api.example.com/v1/chat/completions
+    model: my-model
+    headers:
+      Authorization: Bearer token
   embeddings:
     url: ' https://emb.example.com/v1/embeddings '
     model: ' emb-model '
@@ -88,12 +76,27 @@ func TestLoadConfigLLMEmbeddings(t *testing.T) {
     headers:
       Authorization: ' Bearer emb-token '
 `), 0o644))
-	cfg, err = loadConfig(path)
+	cfg, err := loadConfig(path)
 	require.NoError(t, err)
 	require.Equal(t, "https://emb.example.com/v1/embeddings", cfg.LLM.Embeddings.URL)
 	require.Equal(t, "emb-model", cfg.LLM.Embeddings.Model)
 	require.Equal(t, 1024, cfg.LLM.Embeddings.Dimensions)
 	require.Equal(t, map[string]string{"Authorization": "Bearer emb-token"}, cfg.LLM.Embeddings.Headers)
+
+	// chat and embeddings are independent: embeddings gets no chat defaults.
+	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
+  chat:
+    url: https://api.example.com/v1/chat/completions
+    model: my-model
+    headers:
+      Authorization: Bearer token
+`), 0o644))
+	cfg, err = loadConfig(path)
+	require.NoError(t, err)
+	require.Empty(t, cfg.LLM.Embeddings.URL)
+	require.Empty(t, cfg.LLM.Embeddings.Model)
+	require.Empty(t, cfg.LLM.Embeddings.Headers)
+	require.Zero(t, cfg.LLM.Embeddings.Dimensions)
 }
 
 func TestLoadConfigLLMEmbeddingsRequiresPair(t *testing.T) {
@@ -114,13 +117,13 @@ func TestLoadConfigLLMRequiresPair(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	for _, extra := range []string{
-		"llm:\n  url: https://api.example.com/v1/chat/completions\n",
-		"llm:\n  model: my-model\n",
+		"llm:\n  chat:\n    url: https://api.example.com/v1/chat/completions\n",
+		"llm:\n  chat:\n    model: my-model\n",
 	} {
 		require.NoError(t, os.WriteFile(path, []byte(baseYAML()+extra), 0o644))
 		_, err := loadConfig(path)
 		require.Error(t, err, extra)
-		require.Contains(t, err.Error(), "llm.url and llm.model")
+		require.Contains(t, err.Error(), "llm.chat.url and llm.chat.model")
 	}
 }
 

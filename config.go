@@ -40,19 +40,23 @@ type UploadConfig struct {
 	Workspace string `yaml:"workspace"`
 }
 
-// LLMConfig describes an optional OpenAI-compatible endpoint used by
-// POST /upload/analyze. url and model must be set together.
+// LLMConfig groups the optional OpenAI-compatible endpoints.
 type LLMConfig struct {
-	URL        string            `yaml:"url"`
-	Model      string            `yaml:"model"`
-	Effort     string            `yaml:"effort"`
-	Headers    map[string]string `yaml:"headers"`
-	Embeddings EmbeddingsConfig  `yaml:"embeddings"`
+	Chat       ChatConfig       `yaml:"chat"`
+	Embeddings EmbeddingsConfig `yaml:"embeddings"`
+}
+
+// ChatConfig describes an optional OpenAI-compatible chat endpoint used by
+// POST /upload/analyze. url and model must be set together.
+type ChatConfig struct {
+	URL     string            `yaml:"url"`
+	Model   string            `yaml:"model"`
+	Effort  string            `yaml:"effort"`
+	Headers map[string]string `yaml:"headers"`
 }
 
 // EmbeddingsConfig describes an optional OpenAI-compatible embeddings
-// endpoint. Each field falls back to its llm-level counterpart when unset;
-// dimensions is embeddings-only and optional.
+// endpoint. url and model must be set together; dimensions is optional.
 type EmbeddingsConfig struct {
 	URL        string            `yaml:"url"`
 	Model      string            `yaml:"model"`
@@ -116,25 +120,16 @@ func (c *Config) validate() error {
 	if c.Upload.Workspace == "" {
 		c.Upload.Workspace = defaultUploadWorkspace
 	}
-	c.LLM.URL = strings.TrimSpace(c.LLM.URL)
-	c.LLM.Model = strings.TrimSpace(c.LLM.Model)
-	c.LLM.Effort = strings.TrimSpace(c.LLM.Effort)
-	if (c.LLM.URL == "") != (c.LLM.Model == "") {
-		return fmt.Errorf("config: llm.url and llm.model must be set together")
+	c.LLM.Chat.URL = strings.TrimSpace(c.LLM.Chat.URL)
+	c.LLM.Chat.Model = strings.TrimSpace(c.LLM.Chat.Model)
+	c.LLM.Chat.Effort = strings.TrimSpace(c.LLM.Chat.Effort)
+	if (c.LLM.Chat.URL == "") != (c.LLM.Chat.Model == "") {
+		return fmt.Errorf("config: llm.chat.url and llm.chat.model must be set together")
 	}
-	c.LLM.Headers = normalizeHeaders(c.LLM.Headers)
+	c.LLM.Chat.Headers = normalizeHeaders(c.LLM.Chat.Headers)
 	c.LLM.Embeddings.URL = strings.TrimSpace(c.LLM.Embeddings.URL)
 	c.LLM.Embeddings.Model = strings.TrimSpace(c.LLM.Embeddings.Model)
 	c.LLM.Embeddings.Headers = normalizeHeaders(c.LLM.Embeddings.Headers)
-	if c.LLM.Embeddings.URL == "" {
-		c.LLM.Embeddings.URL = c.LLM.URL
-	}
-	if c.LLM.Embeddings.Model == "" {
-		c.LLM.Embeddings.Model = c.LLM.Model
-	}
-	if c.LLM.Embeddings.Headers == nil {
-		c.LLM.Embeddings.Headers = c.LLM.Headers
-	}
 	if (c.LLM.Embeddings.URL == "") != (c.LLM.Embeddings.Model == "") {
 		return fmt.Errorf("config: llm.embeddings.url and llm.embeddings.model must be set together")
 	}

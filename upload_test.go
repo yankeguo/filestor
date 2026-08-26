@@ -322,7 +322,7 @@ func TestUploadStateLifecycle(t *testing.T) {
 
 func TestUploadPageShowsAnalyzeWhenLLMConfigured(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
-	cfg.LLM = LLMConfig{URL: "http://127.0.0.1:1/", Model: "m"}
+	cfg.LLM.Chat = ChatConfig{URL: "http://127.0.0.1:1/", Model: "m"}
 	h := NewServer(cfg, &fakeStore{}).Handler()
 	cookie := loginCookie(t, h)
 	req := httptest.NewRequest(http.MethodGet, "/upload", nil)
