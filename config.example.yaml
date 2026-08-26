@@ -19,7 +19,8 @@ upload:
 # on the upload page; chat.url and chat.model must be set together, effort is
 # the model's reasoning effort, headers is an optional map of HTTP headers.
 # embeddings is an independent endpoint (no chat defaults); embeddings.url and
-# embeddings.model must be set together, dimensions is optional.
+# embeddings.model must be set together, dimensions is optional, dialect
+# defaults to bailian_multimodal_embedding (currently the only supported value).
 # llm:
 #   chat:
 #     url: https://api.example.com/v1/chat/completions
@@ -31,5 +32,6 @@ upload:
 #     url: https://api.example.com/v1/embeddings
 #     model: my-embedding-model
 #     dimensions: 1024
+#     dialect: bailian_multimodal_embedding
 #     headers:
 #       Authorization: Bearer REPLACE_ME

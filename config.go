@@ -10,7 +10,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const defaultUploadWorkspace = "upload-workspace"
+const (
+	defaultUploadWorkspace   = "upload-workspace"
+	defaultEmbeddingsDialect = "bailian_multimodal_embedding"
+)
 
 type Config struct {
 	Admin  AdminConfig  `yaml:"admin"`
@@ -57,11 +60,14 @@ type ChatConfig struct {
 
 // EmbeddingsConfig describes an optional OpenAI-compatible embeddings
 // endpoint. url and model must be set together; dimensions is optional.
+// dialect selects the request/response shape; empty defaults to
+// bailian_multimodal_embedding, currently the only supported value.
 type EmbeddingsConfig struct {
 	URL        string            `yaml:"url"`
 	Model      string            `yaml:"model"`
 	Headers    map[string]string `yaml:"headers"`
 	Dimensions int               `yaml:"dimensions"`
+	Dialect    string            `yaml:"dialect"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -130,11 +136,17 @@ func (c *Config) validate() error {
 	c.LLM.Embeddings.URL = strings.TrimSpace(c.LLM.Embeddings.URL)
 	c.LLM.Embeddings.Model = strings.TrimSpace(c.LLM.Embeddings.Model)
 	c.LLM.Embeddings.Headers = normalizeHeaders(c.LLM.Embeddings.Headers)
+	c.LLM.Embeddings.Dialect = strings.TrimSpace(c.LLM.Embeddings.Dialect)
 	if (c.LLM.Embeddings.URL == "") != (c.LLM.Embeddings.Model == "") {
 		return fmt.Errorf("config: llm.embeddings.url and llm.embeddings.model must be set together")
 	}
 	if c.LLM.Embeddings.Dimensions < 0 {
 		return fmt.Errorf("config: llm.embeddings.dimensions must not be negative")
+	}
+	if c.LLM.Embeddings.Dialect == "" {
+		c.LLM.Embeddings.Dialect = defaultEmbeddingsDialect
+	} else if c.LLM.Embeddings.Dialect != defaultEmbeddingsDialect {
+		return fmt.Errorf("config: llm.embeddings.dialect %q is not supported", c.LLM.Embeddings.Dialect)
 	}
 	return nil
 }

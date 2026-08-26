@@ -81,6 +81,7 @@ func TestLoadConfigLLMEmbeddings(t *testing.T) {
 	require.Equal(t, "https://emb.example.com/v1/embeddings", cfg.LLM.Embeddings.URL)
 	require.Equal(t, "emb-model", cfg.LLM.Embeddings.Model)
 	require.Equal(t, 1024, cfg.LLM.Embeddings.Dimensions)
+	require.Equal(t, defaultEmbeddingsDialect, cfg.LLM.Embeddings.Dialect)
 	require.Equal(t, map[string]string{"Authorization": "Bearer emb-token"}, cfg.LLM.Embeddings.Headers)
 
 	// chat and embeddings are independent: embeddings gets no chat defaults.
@@ -97,6 +98,7 @@ func TestLoadConfigLLMEmbeddings(t *testing.T) {
 	require.Empty(t, cfg.LLM.Embeddings.Model)
 	require.Empty(t, cfg.LLM.Embeddings.Headers)
 	require.Zero(t, cfg.LLM.Embeddings.Dimensions)
+	require.Equal(t, defaultEmbeddingsDialect, cfg.LLM.Embeddings.Dialect)
 }
 
 func TestLoadConfigLLMEmbeddingsRequiresPair(t *testing.T) {
@@ -111,6 +113,30 @@ func TestLoadConfigLLMEmbeddingsRequiresPair(t *testing.T) {
 		require.Error(t, err, extra)
 		require.Contains(t, err.Error(), "llm.embeddings.url and llm.embeddings.model")
 	}
+}
+
+func TestLoadConfigLLMEmbeddingsDialect(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
+  embeddings:
+    url: https://emb.example.com/v1/embeddings
+    model: emb-model
+    dialect: ' bailian_multimodal_embedding '
+`), 0o644))
+	cfg, err := loadConfig(path)
+	require.NoError(t, err)
+	require.Equal(t, defaultEmbeddingsDialect, cfg.LLM.Embeddings.Dialect)
+
+	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
+  embeddings:
+    url: https://emb.example.com/v1/embeddings
+    model: emb-model
+    dialect: openai
+`), 0o644))
+	_, err = loadConfig(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "llm.embeddings.dialect")
 }
 
 func TestLoadConfigLLMRequiresPair(t *testing.T) {
