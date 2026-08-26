@@ -75,14 +75,13 @@ const analyzeSystemPromptRaw = `You analyze a batch of staged files before uploa
 - load_media(name) loads images for you to see: pass a staged image, document, or video name to load all its derived images (normalized image, rendered pages, extracted frames), or a single derived image name like ⟪report.docx.p01.jpg⟫.
 - When a document's text form is missing, empty, or too short to judge — a scanned or all-image document — load_media its page images instead.
 - Skip very large files (e.g. a video or PDF of several hundred MB): judge them by name instead; a huge file must not block your analysis.
-- Outputs, in any order:
-  - set_title: one short, descriptive title for the whole batch (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单". Required, exactly once.
-  - set_datetime: only if the contents contain a clear document date or datetime (YYYY-MM-DD or YYYY-MM-DDTHH:mm). Do not guess.
-  - mark_text: split the important text into small, independently indexable chunks — one call per chunk, each chunk self-contained without its surrounding context and focused on one topic. Quote the source text or tighten it slightly.
-  - mark_image: pick the content-bearing images worth indexing. Skip an image whose textual content your mark_text chunks already cover; mark the images that carry no text — or content the text flow could not extract — such as photos, diagrams, and scanned pages. Pass a single derived image name or a native staged image name.
-  - rename_file: only for a staged file whose name is clearly messy or uninformative — camera/scanner codes like ⟪IMG_2048.jpg⟫ or ⟪SCAN_0001.pdf⟫, timestamp-only screenshot names, random hashes, placeholder names like ⟪untitled⟫ or ⟪新建文档⟫, noise like ⟪final2⟫, ⟪copy of⟫, ⟪(1)⟫, or a name date that is redundant or contradicts the document's actual date — and you are confident about its content. Use a short, descriptive new name in the same language as the content; use the document's actual date in it or drop the date entirely, never keep a date you know is wrong. Keep the extension; use only letters, digits, dash, underscore, dot; rename each file at most once; never pick a name another staged file already has. When in doubt, keep the original name. Derived forms keep the original staged file name.
+- Work in this order:
+  1. Inspect the files: read_file or load_media whatever you need to understand the batch.
+  2. Rename on demand, before anything else: if a staged file's name is clearly messy or uninformative — camera/scanner codes like ⟪IMG_2048.jpg⟫ or ⟪SCAN_0001.pdf⟫, timestamp-only screenshot names, random hashes, placeholder names like ⟪untitled⟫ or ⟪新建文档⟫, noise like ⟪final2⟫, ⟪copy of⟫, ⟪(1)⟫, or a name date that is redundant or contradicts the document's actual date — and you are confident about its content, call rename_file with a short, descriptive new name in the same language as the content. Use the document's actual date in the new name or drop the date entirely; never keep a date you know is wrong. Keep the extension; use only letters, digits, dash, underscore, dot; rename each file at most once; never pick a name another staged file already has. When in doubt, keep the original name. Do every rename now: rename_file also renames the file's derived forms and returns the complete updated roster — use the new names from then on.
+  3. Mark the digest, after any renames: mark_text splits the important text into small, independently indexable chunks — one call per chunk, each chunk self-contained without its surrounding context and focused on one topic; quote the source text or tighten it slightly. mark_image picks the content-bearing images worth indexing: skip an image whose textual content your mark_text chunks already cover, and mark the images that carry no text — or content the text flow could not extract — such as photos, diagrams, and scanned pages. Use names from the latest roster.
+  4. Set the metadata, last: call set_title exactly once with a short, descriptive title for the whole batch (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单". Only if the contents contain a clear document date or datetime, call set_datetime with it (YYYY-MM-DD or YYYY-MM-DDTHH:mm); do not guess.
 - mark_text and mark_image build the batch's content digest, used later for search and embedding. When in doubt, mark less — but do mark the important content you have actually seen.
-- Call finish once when the analysis is complete; if you stop without calling finish you will be asked whether to continue or finish. Decide quickly: reading every file is rarely necessary. File names in messages are wrapped in ⟪backticks⟫; tool arguments take the bare name without backticks.`
+- Call finish once when every step is done; if you stop without calling finish you will be asked whether to continue or finish. Decide quickly: reading every file is rarely necessary. File names in messages are wrapped in ⟪backticks⟫; tool arguments take the bare name without backticks.`
 
 var analyzeSystemPrompt = strings.NewReplacer("⟪", "`", "⟫", "`").Replace(analyzeSystemPromptRaw)
 
@@ -179,8 +178,9 @@ var (
 	}}
 	analyzeToolLoadMedia = nameParamTool("load_media", "Load images to view: pass a staged image, document, or video name to load all its derived images (normalized image, rendered pages, extracted frames), or a single derived image name.")
 	analyzeToolRename    = chatTool{Type: "function", Function: chatToolFunction{
-		Name:        "rename_file",
-		Description: "Rename a staged file whose name is messy, uninformative, or carries a redundant or wrong date. Only when confident about the content; keep the extension unchanged.",
+		Name: "rename_file",
+		Description: "Rename a staged file whose name is messy, uninformative, or carries a redundant or wrong date. Only when confident about the content; keep the extension unchanged. " +
+			"The derived text/image forms are renamed with it, and the reply returns the complete updated file roster — use the new names from then on. Do every rename before marking digest content.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -193,7 +193,7 @@ var (
 	analyzeToolMarkText = chatTool{Type: "function", Function: chatToolFunction{
 		Name: "mark_text",
 		Description: `Mark one small, independently indexable text chunk as part of the batch's content digest for later search and embedding. ` +
-			`One call per chunk; keep each chunk self-contained and focused on one topic.`,
+			`One call per chunk; keep each chunk self-contained and focused on one topic. Call after any renames.`,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -202,10 +202,10 @@ var (
 			"required": []string{"text"},
 		},
 	}}
-	analyzeToolMarkImage = nameParamTool("mark_image", "Mark one content-bearing image as part of the batch's content digest for later search and embedding: pass a single derived image name (a rendered page, extracted frame, or normalized image) or a native staged image name. Skip images whose content your marked text chunks already cover.")
+	analyzeToolMarkImage = nameParamTool("mark_image", "Mark one content-bearing image as part of the batch's content digest for later search and embedding: pass a single derived image name (a rendered page, extracted frame, or normalized image) or a native staged image name from the latest roster (after any renames). Skip images whose content your marked text chunks already cover.")
 	analyzeToolSetTitle  = chatTool{Type: "function", Function: chatToolFunction{
 		Name:        "set_title",
-		Description: "Set the upload title. Call exactly once when you have decided.",
+		Description: "Set the upload title. Call exactly once when you have decided, after any renames and digest marks.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -216,7 +216,7 @@ var (
 	}}
 	analyzeToolSetDatetime = chatTool{Type: "function", Function: chatToolFunction{
 		Name:        "set_datetime",
-		Description: "Set the bundle time from a clear date or datetime found in the files. Do not guess.",
+		Description: "Set the bundle time from a clear date or datetime found in the files. Do not guess. Call after any renames and digest marks.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -227,7 +227,7 @@ var (
 	}}
 	analyzeToolFinish = chatTool{Type: "function", Function: chatToolFunction{
 		Name:        "finish",
-		Description: "End the analysis. Call once when every output is done: the title is set and the important content is marked.",
+		Description: "End the analysis. Call once when every step is done: files renamed as needed, digest marked, title (and optionally datetime) set.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -279,6 +279,9 @@ type analyzeAgent struct {
 	digestImages map[string]bool
 	// entries maps the current staged name to its pre-converted forms;
 	// derived maps every product name in .filestor/analyze back to its entry.
+	// list keeps the entries in their initial order so an updated roster can
+	// be rebuilt after a rename.
+	list       []*analyzeEntry
 	entries    map[string]*analyzeEntry
 	derived    map[string]*analyzeEntry
 	onProgress func(jobProgress)
@@ -688,6 +691,7 @@ func buildAnalyzeListing(entries []*analyzeEntry) string {
 
 // indexEntries builds the agent's name lookups from a prep manifest.
 func (a *analyzeAgent) indexEntries(list []*analyzeEntry) {
+	a.list = list
 	a.entries = make(map[string]*analyzeEntry, len(list))
 	a.derived = make(map[string]*analyzeEntry)
 	for _, e := range list {
@@ -696,6 +700,38 @@ func (a *analyzeAgent) indexEntries(list []*analyzeEntry) {
 			a.derived[n] = e
 		}
 	}
+}
+
+// renameDerived renames one entry's products in .filestor/analyze along with
+// its staged file, updating the entry fields and the derived-name lookup.
+// Best effort: a product that cannot be renamed keeps its old name.
+func (a *analyzeAgent) renameDerived(e *analyzeEntry, oldName, newName string) {
+	dir := workspaceAnalyzePath(a.dir)
+	rename := func(product string) string {
+		if product == "" {
+			return ""
+		}
+		suffix := strings.TrimPrefix(product, oldName)
+		if suffix == product {
+			return product // not derived from the old name; leave it alone
+		}
+		renamed := newName + suffix
+		if err := os.Rename(filepath.Join(dir, product), filepath.Join(dir, renamed)); err != nil {
+			log.Println("rename analyze product:", err)
+			return product
+		}
+		delete(a.derived, product)
+		a.derived[renamed] = e
+		return renamed
+	}
+	e.Text = rename(e.Text)
+	for i, p := range e.Pages {
+		e.Pages[i] = rename(p)
+	}
+	for i, f := range e.Frames {
+		e.Frames[i] = rename(f)
+	}
+	e.Image = rename(e.Image)
 }
 
 func (a *analyzeAgent) run(ctx context.Context, files []workspaceFile) (string, error) {
@@ -1160,16 +1196,19 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 		if a.onFiles != nil {
 			a.onFiles()
 		}
-		// Echo the new name so later read calls use it; the file list in the
-		// initial user message still shows the old one.
 		oldName, _ := sanitizeWorkspaceName(args.Name)
 		newName, _ := sanitizeWorkspaceName(args.NewName)
 		if e := a.entries[oldName]; e != nil {
 			delete(a.entries, oldName)
 			e.Name = newName
 			a.entries[newName] = e
+			// The derived products (text form, pages, frames, normalized
+			// image) follow the staged file's new name.
+			a.renameDerived(e, oldName, newName)
 		}
-		return reply("renamed to `" + newName + "`")
+		// Return the complete updated roster so later read/mark calls use
+		// the new names.
+		return reply("renamed to `" + newName + "`\n\n" + buildAnalyzeListing(a.list))
 	case "mark_text":
 		return reply(a.toolMarkText(args.Text))
 	case "mark_image":

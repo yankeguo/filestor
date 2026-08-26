@@ -177,14 +177,21 @@ func TestUploadAnalyzeRename(t *testing.T) {
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c2","type":"function","function":{"name":"rename_file","arguments":"{\"name\":\"IMG_2048.txt\",\"new_name\":\"2026-03-invoice.txt\"}"}}]}}]}`
 		case 3:
-			// The tool reply echoes the new name so later reads can use it.
+			// The tool reply echoes the new name so later reads can use it,
+			// and carries the complete updated roster (the other staged file
+			// shows up under its own name).
 			found := false
+			roster := false
 			for _, m := range req.Messages {
-				if s, ok := m.Content.(string); ok && m.Role == "tool" && strings.Contains(s, "renamed to `2026-03-invoice.txt`") {
-					found = true
+				if s, ok := m.Content.(string); ok && m.Role == "tool" {
+					if strings.Contains(s, "renamed to `2026-03-invoice.txt`") {
+						found = true
+						roster = strings.Contains(s, "march-invoice.txt")
+					}
 				}
 			}
 			rq.True(found)
+			rq.True(roster, "rename reply must carry the complete updated roster")
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c3","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"march-invoice\"}"}},` +
 				`{"id":"c4","type":"function","function":{"name":"finish","arguments":"{}"}}]}}]}`
@@ -1307,4 +1314,58 @@ func TestPrepAnalyzeResetsDigest(t *testing.T) {
 	entries, err := os.ReadDir(workspaceDigestPath(dir))
 	require.NoError(t, err)
 	require.Empty(t, entries)
+}
+
+func TestRenameFileToolRenamesDerived(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "IMG_2048.pdf"), []byte("%PDF fake"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hi"), 0o644))
+	require.NoError(t, os.MkdirAll(workspaceAnalyzePath(dir), 0o755))
+	jpg := []byte{0xff, 0xd8, 0xff, 0xd9}
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceAnalyzePath(dir), "IMG_2048.pdf.txt"), []byte("doc body"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceAnalyzePath(dir), "IMG_2048.pdf.p01.jpg"), jpg, 0o644))
+
+	a := newTestAgent(t, dir, []*analyzeEntry{
+		{Name: "IMG_2048.pdf", Size: "10 B", Kind: kindDocument, Text: "IMG_2048.pdf.txt", TextLines: 1, Pages: []string{"IMG_2048.pdf.p01.jpg"}},
+		{Name: "notes.txt", Size: "2 B", Kind: kindText},
+	})
+
+	reply, extra := a.runTool(context.Background(), chatToolCall{
+		ID: "c1", Type: "function",
+		Function: chatFunctionCall{Name: "rename_file", Arguments: json.RawMessage(`{"name":"IMG_2048.pdf","new_name":"invoice-2026-03.pdf"}`)},
+	})
+	require.Empty(t, extra)
+	text, _ := reply.Content.(string)
+	require.Contains(t, text, "renamed to `invoice-2026-03.pdf`")
+	// The reply carries the complete updated roster with the new names.
+	require.Contains(t, text, "invoice-2026-03.pdf.txt")
+	require.Contains(t, text, "invoice-2026-03.pdf.p01.jpg")
+	require.Contains(t, text, "notes.txt")
+	require.NotContains(t, text, "IMG_2048")
+
+	// The staged file and its derived products were renamed on disk.
+	_, err := os.Stat(filepath.Join(dir, "invoice-2026-03.pdf"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(workspaceAnalyzePath(dir), "invoice-2026-03.pdf.txt"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(workspaceAnalyzePath(dir), "invoice-2026-03.pdf.p01.jpg"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(workspaceAnalyzePath(dir), "IMG_2048.pdf.p01.jpg"))
+	require.True(t, os.IsNotExist(err))
+
+	// The entry and the name lookups follow the new names.
+	e := a.entries["invoice-2026-03.pdf"]
+	require.NotNil(t, e)
+	require.Equal(t, "invoice-2026-03.pdf.txt", e.Text)
+	require.Equal(t, []string{"invoice-2026-03.pdf.p01.jpg"}, e.Pages)
+	require.Nil(t, a.entries["IMG_2048.pdf"])
+	require.Same(t, e, a.derived["invoice-2026-03.pdf.p01.jpg"])
+	require.Nil(t, a.derived["IMG_2048.pdf.p01.jpg"])
+
+	// Later read/load calls resolve by the new names.
+	out := a.toolReadFile("invoice-2026-03.pdf.txt", 1, 10)
+	require.Contains(t, out, "doc body")
+	label, imgs := a.toolLoadMedia("invoice-2026-03.pdf")
+	require.Contains(t, label, "1 page(s) of `invoice-2026-03.pdf`")
+	require.Len(t, imgs, 1)
 }
