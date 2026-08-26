@@ -11,20 +11,33 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	convertTimeout  = 45 * time.Second
-	convertCacheTTL = 7 * 24 * time.Hour
+	// convertTimeout bounds one image conversion; documents and videos get
+	// convertTimeoutLong per file (multi-page rendering is slower).
+	convertTimeout     = 45 * time.Second
+	convertTimeoutLong = 120 * time.Second
+	convertCacheTTL    = 7 * 24 * time.Hour
+
+	// convertTextMaxBytes caps a converted full-text form on disk.
+	convertTextMaxBytes = 4 << 20
+	// analyzePageMaxBytes caps one rendered document page.
+	analyzePageMaxBytes = 4 << 20
+	// analyzeMaxPages / analyzeMaxFrames bound the page images rendered from
+	// a document and the frames extracted from a video.
+	analyzeMaxPages  = 6
+	analyzeMaxFrames = 3
+	// otherConvertMaxBytes bounds the best-effort text conversion attempted
+	// on unknown binaries; larger files are judged by name only.
+	otherConvertMaxBytes = 64 << 20
 )
 
-var (
-	errConvertUnavailable = errors.New("conversion tools not installed")
-	errUseImageTool       = errors.New("not text; use read_file_as_image")
-)
+var errConvertUnavailable = errors.New("conversion tools not installed")
 
 // lookPath and runCmd are vars so tests can stub converters without
 // installing ImageMagick or LibreOffice.
@@ -69,25 +82,31 @@ func findBin(names ...string) (string, error) {
 	return "", last
 }
 
-func withConvertTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+func withConvertTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithTimeout(ctx, convertTimeout)
+	return context.WithTimeout(ctx, d)
 }
 
-var imageAsTextExts = map[string]bool{
+var imageExts = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
 	".webp": true, ".heic": true, ".heif": true, ".bmp": true,
 	".tif": true, ".tiff": true, ".svg": true, ".ico": true,
 	".avif": true,
 }
 
-var forceTextConvertExts = map[string]bool{
+var documentExts = map[string]bool{
 	".pdf": true,
 	".doc": true, ".docx": true, ".odt": true, ".rtf": true,
 	".ppt": true, ".pptx": true, ".odp": true,
 	".xls": true, ".xlsx": true, ".ods": true,
+}
+
+var videoExts = map[string]bool{
+	".mp4": true, ".mov": true, ".mkv": true, ".avi": true,
+	".webm": true, ".m4v": true, ".mpg": true, ".mpeg": true,
+	".wmv": true, ".flv": true, ".ts": true, ".3gp": true,
 }
 
 var sheetExts = map[string]bool{
@@ -107,19 +126,34 @@ func sniffImageMIME(head []byte) string {
 	return ""
 }
 
-func capConvertedText(data []byte) string {
-	truncated := len(data) > analyzeTextMaxBytes
-	if truncated {
-		data = data[:analyzeTextMaxBytes]
+// nativeImageMIME returns the sniffed mime when the file is a browser- and
+// model-native jpeg/png/gif within the image size cap, so it can be loaded
+// straight from staging without conversion.
+func nativeImageMIME(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
 	}
-	out := string(data)
-	if strings.TrimSpace(out) == "" {
-		return "(empty file)"
+	defer f.Close()
+	head := make([]byte, 16)
+	n, _ := f.Read(head)
+	mime := sniffImageMIME(head[:n])
+	if mime == "" {
+		return ""
 	}
-	if truncated {
-		out += "\n... (truncated)"
+	info, err := f.Stat()
+	if err != nil || info.Size() > analyzeImageMaxBytes {
+		return ""
 	}
-	return out
+	return mime
+}
+
+// capFullText truncates a converted full-text form at convertTextMaxBytes.
+func capFullText(data []byte) string {
+	if len(data) > convertTextMaxBytes {
+		data = data[:convertTextMaxBytes]
+	}
+	return string(data)
 }
 
 func readConvertedOutput(dir, ext string) ([]byte, error) {
@@ -146,10 +180,32 @@ func readConvertedOutput(dir, ext string) ([]byte, error) {
 	return nil, errors.New("converter produced no output")
 }
 
+// convertedFilePath returns the first regular file with the given extension
+// under dir (e.g. the PDF soffice produced).
+func convertedFilePath(dir, ext string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ext) {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if info, err := e.Info(); err == nil && info.Size() > 0 {
+			return p, nil
+		}
+	}
+	return "", errors.New("converter produced no output")
+}
+
 func sofficeConvert(ctx context.Context, src, outdir, format string) error {
 	bin, err := findBin("soffice", "libreoffice")
 	if err != nil {
 		return errConvertUnavailable
+	}
+	if err := os.MkdirAll(outdir, 0o755); err != nil {
+		return err
 	}
 	sofficeMu.Lock()
 	defer sofficeMu.Unlock()
@@ -174,9 +230,10 @@ func magickConvert(ctx context.Context, src, dst string, maxEdge, quality int) e
 	return err
 }
 
-func convertFileToText(ctx context.Context, src string) (string, error) {
-	ctx, cancel := withConvertTimeout(ctx)
-	defer cancel()
+// convertFileToFullText converts a document (or, best-effort, any binary) to
+// its full text form, capped at convertTextMaxBytes. An empty result means no
+// readable text was found (e.g. a scanned, all-image document).
+func convertFileToFullText(ctx context.Context, src string) (string, error) {
 	ext := strings.ToLower(filepath.Ext(src))
 
 	tmp, err := os.MkdirTemp("", "filestor-txt-*")
@@ -193,7 +250,7 @@ func convertFileToText(ctx context.Context, src string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return capConvertedText(data), nil
+		return capFullText(data), nil
 	}
 	tryPandoc := func() (string, error) {
 		bin, err := findBin("pandoc")
@@ -204,7 +261,7 @@ func convertFileToText(ctx context.Context, src string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return capConvertedText(out), nil
+		return capFullText(out), nil
 	}
 
 	switch {
@@ -212,7 +269,7 @@ func convertFileToText(ctx context.Context, src string) (string, error) {
 		if bin, err := findBin("pdftotext"); err == nil {
 			out, err := runCmd(ctx, bin, "-layout", "-nopgbrk", "-enc", "UTF-8", src, "-")
 			if err == nil {
-				return capConvertedText(out), nil
+				return capFullText(out), nil
 			}
 		}
 		if text, err := trySoffice("txt:Text", ".txt"); err == nil {
@@ -225,12 +282,12 @@ func convertFileToText(ctx context.Context, src string) (string, error) {
 		if text, err := trySoffice("txt:Text", ".txt"); err == nil {
 			return text, nil
 		}
-	case forceTextConvertExts[ext]:
+	case documentExts[ext]:
 		if ext == ".doc" {
 			if bin, err := findBin("catdoc"); err == nil {
 				out, err := runCmd(ctx, bin, "-w", src)
 				if err == nil {
-					return capConvertedText(out), nil
+					return capFullText(out), nil
 				}
 			}
 		}
@@ -251,13 +308,13 @@ func convertFileToText(ctx context.Context, src string) (string, error) {
 	return "", fmt.Errorf("%w (cannot convert %s)", errConvertUnavailable, ext)
 }
 
-func convertFileToLLMImage(ctx context.Context, src string) (string, []byte, error) {
-	ctx, cancel := withConvertTimeout(ctx)
-	defer cancel()
-
+// convertFileToLLMImage normalizes any image to a jpeg within
+// analyzeImageMaxBytes, stepping down size and quality until it fits; the
+// soffice png export is the fallback for formats ImageMagick cannot read.
+func convertFileToLLMImage(ctx context.Context, src string) ([]byte, error) {
 	tmp, err := os.MkdirTemp("", "filestor-img-*")
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	defer os.RemoveAll(tmp)
 
@@ -281,20 +338,17 @@ func convertFileToLLMImage(ctx context.Context, src string) (string, []byte, err
 	}
 
 	if data, err := tryMagick(src); err == nil {
-		return "image/jpeg", data, nil
+		return data, nil
 	}
 
 	pngDir := filepath.Join(tmp, "lo")
-	if err := os.MkdirAll(pngDir, 0o755); err != nil {
-		return "", nil, err
-	}
 	if err := sofficeConvert(ctx, src, pngDir, "png"); err == nil {
 		png, err := readConvertedOutput(pngDir, ".png")
 		if err == nil {
 			pngPath := filepath.Join(pngDir, "page.png")
 			if err := os.WriteFile(pngPath, png, 0o644); err == nil {
 				if data, err := tryMagick(pngPath); err == nil {
-					return "image/jpeg", data, nil
+					return data, nil
 				}
 			}
 		}
@@ -302,10 +356,156 @@ func convertFileToLLMImage(ctx context.Context, src string) (string, []byte, err
 
 	if _, err := magickBin(); err != nil {
 		if _, err2 := findBin("soffice", "libreoffice"); err2 != nil {
-			return "", nil, fmt.Errorf("%w (unsupported or oversized image)", errConvertUnavailable)
+			return nil, fmt.Errorf("%w (unsupported or oversized image)", errConvertUnavailable)
 		}
 	}
-	return "", nil, errors.New("could not convert file to jpeg/png/gif")
+	return nil, errors.New("could not convert file to jpeg")
+}
+
+// renderPDFPages renders up to analyzeMaxPages pages of a PDF as images into
+// a fresh subdirectory of tmp and returns their paths. pdftoppm is the
+// primary path: the Debian image ships ImageMagick 6 with a policy that
+// rejects PDFs (no ghostscript), so magick is only a fallback.
+func renderPDFPages(ctx context.Context, pdf, tmp string) ([]string, error) {
+	out := filepath.Join(tmp, "pages")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return nil, err
+	}
+	if bin, err := findBin("pdftoppm"); err == nil {
+		prefix := filepath.Join(out, "pg")
+		if _, err := runCmd(ctx, bin, "-jpeg", "-r", "150", "-f", "1", "-l", strconv.Itoa(analyzeMaxPages), pdf, prefix); err == nil {
+			if pages, _ := filepath.Glob(prefix + "-*.jpg"); len(pages) > 0 {
+				return pages, nil
+			}
+		}
+	}
+	if bin, err := magickBin(); err == nil {
+		// ImageMagick writes one file per page next to the target name.
+		base := filepath.Join(out, "mg.jpg")
+		if _, err := runCmd(ctx, bin, pdf+"[0-5]", "-auto-orient", "-resize", "1600x1600>", "-strip", "-quality", "80", base); err == nil {
+			pages, _ := filepath.Glob(filepath.Join(out, "mg-*.jpg"))
+			if len(pages) == 0 {
+				if info, err := os.Stat(base); err == nil && info.Size() > 0 {
+					pages = []string{base}
+				}
+			}
+			if len(pages) > 0 {
+				return pages, nil
+			}
+		}
+	}
+	return nil, errConvertUnavailable
+}
+
+// shrinkPageImage brings one rendered page under analyzePageMaxBytes.
+// pdftoppm pages at 150 dpi are already small enough and pass through
+// untouched; anything larger walks the magick step-down ladder.
+func shrinkPageImage(ctx context.Context, path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 0 && int64(len(data)) <= analyzePageMaxBytes {
+		return data, nil
+	}
+	for _, step := range []struct {
+		edge, quality int
+	}{{1600, 80}, {1024, 60}} {
+		out := fmt.Sprintf("%s.s%d.jpg", path, step.edge)
+		if err := magickConvert(ctx, path, out, step.edge, step.quality); err != nil {
+			return nil, err
+		}
+		data, err := os.ReadFile(out)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > 0 && int64(len(data)) <= analyzePageMaxBytes {
+			return data, nil
+		}
+	}
+	return nil, fmt.Errorf("page image still exceeds %s", formatSize(analyzePageMaxBytes))
+}
+
+// convertFileToPageImages renders up to analyzeMaxPages page images of a
+// document: PDFs go straight to renderPDFPages, office documents through a
+// soffice PDF export first; the last resort is a single soffice png page.
+func convertFileToPageImages(ctx context.Context, src string) ([][]byte, error) {
+	tmp, err := os.MkdirTemp("", "filestor-pgs-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+
+	var raw []string
+	if strings.EqualFold(filepath.Ext(src), ".pdf") {
+		raw, _ = renderPDFPages(ctx, src, tmp)
+	}
+	if len(raw) == 0 {
+		// Office documents (and stubborn PDFs): export to PDF, then render.
+		pdfDir := filepath.Join(tmp, "pdf")
+		if err := sofficeConvert(ctx, src, pdfDir, "pdf"); err == nil {
+			if pdf, err := convertedFilePath(pdfDir, ".pdf"); err == nil {
+				raw, _ = renderPDFPages(ctx, pdf, tmp)
+			}
+		}
+	}
+	if len(raw) == 0 {
+		// Last resort: a single soffice png page (may stay png; the mime is
+		// sniffed again when the page is loaded for the model).
+		pngDir := filepath.Join(tmp, "png")
+		if err := sofficeConvert(ctx, src, pngDir, "png"); err == nil {
+			if png, err := convertedFilePath(pngDir, ".png"); err == nil {
+				raw = []string{png}
+			}
+		}
+	}
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("%w (cannot render pages of %s)", errConvertUnavailable, filepath.Ext(src))
+	}
+	var out [][]byte
+	for _, p := range raw[:min(len(raw), analyzeMaxPages)] {
+		data, err := shrinkPageImage(ctx, p)
+		if err != nil {
+			continue // drop unshrinkable pages, keep the rest
+		}
+		out = append(out, data)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("could not render any page image")
+	}
+	return out, nil
+}
+
+// convertFileToFrameImages extracts up to analyzeMaxFrames jpeg frames from
+// a video with ffmpeg (one frame per ~5 seconds, 1280 px wide).
+func convertFileToFrameImages(ctx context.Context, src string) ([][]byte, error) {
+	bin, err := findBin("ffmpeg")
+	if err != nil {
+		return nil, errConvertUnavailable
+	}
+	tmp, err := os.MkdirTemp("", "filestor-frm-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+
+	pattern := filepath.Join(tmp, "f%02d.jpg")
+	if _, err := runCmd(ctx, bin, "-i", src, "-vf", "fps=1/5,scale=1280:-2", "-frames:v", strconv.Itoa(analyzeMaxFrames), pattern); err != nil {
+		return nil, err
+	}
+	paths, _ := filepath.Glob(filepath.Join(tmp, "f*.jpg"))
+	var out [][]byte
+	for _, p := range paths[:min(len(paths), analyzeMaxFrames)] {
+		data, err := os.ReadFile(p)
+		if err != nil || len(data) == 0 || int64(len(data)) > analyzeImageMaxBytes {
+			continue
+		}
+		out = append(out, data)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no frames extracted")
+	}
+	return out, nil
 }
 
 // hashFileSHA256 returns the hex content hash used as the conversion cache key.
@@ -322,24 +522,39 @@ func hashFileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// convertCacheGet returns the cached conversion output for a content hash.
-// Entries older than convertCacheTTL count as a miss (left in place for
-// pruneConvertCache to remove).
-func convertCacheGet(dir, key, ext string) ([]byte, bool) {
-	p := filepath.Join(workspaceCachePath(dir), key+ext)
-	if info, err := os.Stat(p); err != nil || time.Since(info.ModTime()) > convertCacheTTL {
+// convertCacheGetPath returns the cached file for a key+suffix (e.g.
+// "<sha256>.txt"). Entries older than convertCacheTTL or empty count as a
+// miss (left in place for pruneConvertCache to remove).
+func convertCacheGetPath(dir, name string) (string, bool) {
+	p := filepath.Join(workspaceCachePath(dir), name)
+	info, err := os.Stat(p)
+	if err != nil || info.Size() == 0 || time.Since(info.ModTime()) > convertCacheTTL {
+		return "", false
+	}
+	return p, true
+}
+
+// convertCacheList enumerates a multi-file cached conversion (pages, frames)
+// by glob. Any missing, empty, or expired piece makes the whole set a miss.
+func convertCacheList(dir, key, globSuffix string) ([]string, bool) {
+	paths, err := filepath.Glob(filepath.Join(workspaceCachePath(dir), key+globSuffix))
+	if err != nil || len(paths) == 0 {
 		return nil, false
 	}
-	data, err := os.ReadFile(p)
-	if err != nil || len(data) == 0 {
-		return nil, false
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil || info.Size() == 0 || time.Since(info.ModTime()) > convertCacheTTL {
+			return nil, false
+		}
+		out = append(out, p)
 	}
-	return data, true
+	return out, true
 }
 
 // convertCachePut stores a conversion result atomically and prunes expired
 // entries on the way out (best-effort).
-func convertCachePut(dir, key, ext string, data []byte) {
+func convertCachePut(dir, key, suffix string, data []byte) {
 	if len(data) == 0 {
 		return
 	}
@@ -359,7 +574,7 @@ func convertCachePut(dir, key, ext string, data []byte) {
 	if err := tmp.Close(); err != nil {
 		return
 	}
-	if err := os.Rename(tmpName, filepath.Join(workspaceCachePath(dir), key+ext)); err != nil {
+	if err := os.Rename(tmpName, filepath.Join(workspaceCachePath(dir), key+suffix)); err != nil {
 		return
 	}
 	pruneConvertCache(dir)
@@ -381,41 +596,89 @@ func pruneConvertCache(dir string) {
 	}
 }
 
-// convertFileToTextCached converts like convertFileToText but memoizes the
-// result under the workspace's .filestor/cache, keyed by the source content
-// hash, so re-reading a staged file skips the external converters.
-func convertFileToTextCached(ctx context.Context, dir, src string) (string, error) {
+// convertToTextFile converts src to its full text form, memoized under the
+// workspace's .filestor/cache as <sha256>.txt keyed by the source content
+// hash, and returns the cache file path. Empty conversions are not cached
+// and report an error (no readable text).
+func convertToTextFile(ctx context.Context, dir, src string) (string, error) {
 	key, err := hashFileSHA256(src)
-	if err == nil {
-		if data, ok := convertCacheGet(dir, key, ".txt"); ok {
-			return string(data), nil
-		}
-	}
-	text, err := convertFileToText(ctx, src)
 	if err != nil {
 		return "", err
 	}
-	if key != "" {
-		convertCachePut(dir, key, ".txt", []byte(text))
+	if p, ok := convertCacheGetPath(dir, key+".txt"); ok {
+		return p, nil
 	}
-	return text, nil
+	text, err := convertFileToFullText(ctx, src)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", errors.New("no readable text")
+	}
+	convertCachePut(dir, key, ".txt", []byte(text))
+	return filepath.Join(workspaceCachePath(dir), key+".txt"), nil
 }
 
-// convertFileToLLMImageCached is the cached counterpart of
-// convertFileToLLMImage; cached entries are always jpeg.
-func convertFileToLLMImageCached(ctx context.Context, dir, src string) (string, []byte, error) {
+// convertToImageFile normalizes src to a single jpeg, cached as
+// <sha256>.jpg, and returns the cache file path.
+func convertToImageFile(ctx context.Context, dir, src string) (string, error) {
 	key, err := hashFileSHA256(src)
-	if err == nil {
-		if data, ok := convertCacheGet(dir, key, ".jpg"); ok {
-			return "image/jpeg", data, nil
-		}
-	}
-	mime, data, err := convertFileToLLMImage(ctx, src)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
-	if key != "" && mime == "image/jpeg" {
-		convertCachePut(dir, key, ".jpg", data)
+	if p, ok := convertCacheGetPath(dir, key+".jpg"); ok {
+		return p, nil
 	}
-	return mime, data, nil
+	data, err := convertFileToLLMImage(ctx, src)
+	if err != nil {
+		return "", err
+	}
+	convertCachePut(dir, key, ".jpg", data)
+	return filepath.Join(workspaceCachePath(dir), key+".jpg"), nil
+}
+
+// convertToPageFiles renders the document pages of src, cached as
+// <sha256>.p01.jpg… and enumerated by glob, and returns the cache paths.
+func convertToPageFiles(ctx context.Context, dir, src string) ([]string, error) {
+	key, err := hashFileSHA256(src)
+	if err != nil {
+		return nil, err
+	}
+	if pages, ok := convertCacheList(dir, key, ".p*.jpg"); ok {
+		return pages, nil
+	}
+	blobs, err := convertFileToPageImages(ctx, src)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(blobs))
+	for i, data := range blobs {
+		suffix := fmt.Sprintf(".p%02d.jpg", i+1)
+		convertCachePut(dir, key, suffix, data)
+		paths = append(paths, filepath.Join(workspaceCachePath(dir), key+suffix))
+	}
+	return paths, nil
+}
+
+// convertToFrameFiles extracts the video frames of src, cached as
+// <sha256>.f1.jpg… and enumerated by glob, and returns the cache paths.
+func convertToFrameFiles(ctx context.Context, dir, src string) ([]string, error) {
+	key, err := hashFileSHA256(src)
+	if err != nil {
+		return nil, err
+	}
+	if frames, ok := convertCacheList(dir, key, ".f*.jpg"); ok {
+		return frames, nil
+	}
+	blobs, err := convertFileToFrameImages(ctx, src)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(blobs))
+	for i, data := range blobs {
+		suffix := fmt.Sprintf(".f%d.jpg", i+1)
+		convertCachePut(dir, key, suffix, data)
+		paths = append(paths, filepath.Join(workspaceCachePath(dir), key+suffix))
+	}
+	return paths, nil
 }

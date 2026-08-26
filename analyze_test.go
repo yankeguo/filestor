@@ -122,7 +122,7 @@ func TestUploadAnalyzeSuccess(t *testing.T) {
 			rq.Equal("Bearer token", r.Header.Get("Authorization"))
 			rq.Len(req.Tools, 5)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-				`{"id":"c1","type":"function","function":{"name":"read_file_as_text","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
+				`{"id":"c1","type":"function","function":{"name":"read_file","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
 		case 2:
 			// The tool reply carries the file content back to the model.
 			found := false
@@ -221,7 +221,7 @@ func TestUploadAnalyzeImageTool(t *testing.T) {
 		switch call {
 		case 1:
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-				`{"id":"c1","type":"function","function":{"name":"read_file_as_image","arguments":"{\"name\":\"pic.png\"}"}}]}}]}`
+				`{"id":"c1","type":"function","function":{"name":"load_media","arguments":"{\"name\":\"pic.png\"}"}}]}}]}`
 		case 2:
 			// The image is appended as a user message with a base64 image_url part.
 			found := false
@@ -269,8 +269,8 @@ func TestUploadAnalyzeMultiImageRepliesStayConsecutive(t *testing.T) {
 		case 1:
 			// Two image reads in a single assistant turn.
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-				`{"id":"c1","type":"function","function":{"name":"read_file_as_image","arguments":"{\"name\":\"a.png\"}"}},` +
-				`{"id":"c2","type":"function","function":{"name":"read_file_as_image","arguments":"{\"name\":\"b.png\"}"}}]}}]}`
+				`{"id":"c1","type":"function","function":{"name":"load_media","arguments":"{\"name\":\"a.png\"}"}},` +
+				`{"id":"c2","type":"function","function":{"name":"load_media","arguments":"{\"name\":\"b.png\"}"}}]}}]}`
 		case 2:
 			// The assistant turn must be followed by consecutive tool replies;
 			// the user messages carrying the images come after them, or strict
@@ -358,7 +358,7 @@ func TestUploadAnalyzeRoundBudgetForcesDecision(t *testing.T) {
 		if call <= analyzeBaseRounds {
 			// The model keeps reading the same file, burning every round.
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-				`{"id":"c","type":"function","function":{"name":"read_file_as_text","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
+				`{"id":"c","type":"function","function":{"name":"read_file","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
 		}
 		rq.Equal(analyzeBaseRounds+1, call)
 		rq.Len(req.Tools, 2, "forced round drops the read tools")
@@ -403,6 +403,12 @@ func TestAnalyzeBudget(t *testing.T) {
 }
 
 func TestUploadAnalyzePeeks(t *testing.T) {
+	// The staged binary would trigger a best-effort conversion; keep the
+	// converters stubbed out.
+	stubConvert(t, noBins, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatal("runCmd should not be called")
+		return nil, nil
+	})
 	cfg := cfgWithWorkspace(t)
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "report.txt"), []byte("Q3 revenue\nsummary\nand outlook"), 0o644))
@@ -415,9 +421,12 @@ func TestUploadAnalyzePeeks(t *testing.T) {
 				list = s
 			}
 		}
-		// Native text gets a one-line peek; the binary file gets none.
+		// Native text gets a line count and a one-line peek; the binary file
+		// gets neither and is listed with no readable form.
+		rq.Contains(list, "`report.txt` (30 B, text, 3 lines)")
 		rq.Contains(list, "peek: Q3 revenue summary and outlook")
 		rq.Equal(1, strings.Count(list, "peek:"))
+		rq.Contains(list, "`bin.dat` (3 B, binary) — no readable form")
 		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"q3-report\"}"}}]}}]}`
 	})
@@ -611,55 +620,462 @@ func TestWorkspaceLockDuringAnalyze(t *testing.T) {
 	require.Equal(t, "ok", loadWorkspaceState(cfg.Upload.Workspace).Title)
 }
 
-func TestReadWorkspaceText(t *testing.T) {
-	stubConvert(t, noBins, func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		t.Fatal("runCmd should not be called for native text")
-		return nil, nil
-	})
+func TestClassifyStagedFile(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "bin.dat"), []byte{'a', 0, 'b'}, 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "empty.txt"), nil, 0o644))
+	write := func(name string, data []byte) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o644))
+	}
+	write("report.pdf", []byte("not really a pdf but text"))  // extension wins
+	write("scan.svg", []byte("<svg>text but an image</svg>")) // extension wins
+	write("photo.heic", []byte{0, 1, 2})
+	write("clip.mp4", []byte("fake"))
+	write("notes.txt", []byte("hello"))
+	write("readme", []byte("no extension, still text"))
+	write("bin.dat", []byte{'x', 0, 'y'})
+	write("empty.md", nil)
 
-	text, err := readWorkspaceText(context.Background(), dir, "a.txt")
-	require.NoError(t, err)
-	require.Equal(t, "hello", text)
-
-	_, err = readWorkspaceText(context.Background(), dir, "bin.dat")
-	require.Error(t, err)
-	require.ErrorIs(t, err, errConvertUnavailable)
-
-	text, err = readWorkspaceText(context.Background(), dir, "empty.txt")
-	require.NoError(t, err)
-	require.Equal(t, "(empty file)", text)
-
-	_, err = readWorkspaceText(context.Background(), dir, "../secret")
-	require.Error(t, err)
-
-	_, err = readWorkspaceText(context.Background(), dir, ".hidden")
-	require.Error(t, err)
-
-	_, err = readWorkspaceText(context.Background(), dir, "pic.png")
-	require.ErrorIs(t, err, errUseImageTool)
+	cases := []struct {
+		name string
+		kind analyzeKind
+	}{
+		{"report.pdf", kindDocument},
+		{"scan.svg", kindImage},
+		{"photo.heic", kindImage},
+		{"clip.mp4", kindVideo},
+		{"notes.txt", kindText},
+		{"readme", kindText},
+		{"bin.dat", kindOther},
+		{"empty.md", kindText},
+		{"missing.txt", kindOther},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.kind, classifyStagedFile(dir, tc.name), tc.name)
+	}
 }
 
-func TestReadWorkspaceImage(t *testing.T) {
-	stubConvert(t, noBins, func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		t.Fatal("runCmd should not be called for a small png")
+func TestPrepAnalyzeDocument(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "report.docx"), []byte("PK\x03\x04binary"), 0o644))
+
+	// A document pre-converts both ways: full text plus rendered pages.
+	stubConvert(t, func(name string) (string, error) {
+		switch name {
+		case "soffice", "pdftoppm":
+			return "/usr/bin/" + name, nil
+		}
+		return "", errConvertUnavailable
+	}, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch {
+		case strings.Contains(name, "soffice"):
+			outdir := outdirArg(t, args)
+			format := "txt"
+			for i, a := range args {
+				if a == "--convert-to" && i+1 < len(args) {
+					format = args[i+1]
+				}
+			}
+			if format == "pdf" {
+				return nil, os.WriteFile(filepath.Join(outdir, "report.pdf"), []byte("%PDF-1.7"), 0o644)
+			}
+			return nil, os.WriteFile(filepath.Join(outdir, "report.txt"), []byte("line one\nline two\n"), 0o644)
+		case strings.Contains(name, "pdftoppm"):
+			fakePdftoppm(t, args, 2)
+			return nil, nil
+		}
+		t.Fatalf("unexpected command %s", name)
 		return nil, nil
 	})
+
+	files, err := listWorkspaceFiles(dir)
+	require.NoError(t, err)
+	entries := prepAnalyze(context.Background(), dir, files, nil)
+	require.Len(t, entries, 1)
+	e := entries[0]
+	require.Equal(t, kindDocument, e.Kind)
+	require.False(t, e.Failed)
+	require.Equal(t, "report.docx.txt", e.Text)
+	require.Equal(t, 2, e.TextLines)
+	require.Equal(t, []string{"report.docx.p01.jpg", "report.docx.p02.jpg"}, e.Pages)
+
+	// The products are linked into .filestor/analyze under the derived names.
+	text, err := os.ReadFile(filepath.Join(workspaceAnalyzePath(dir), "report.docx.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "line one\nline two\n", string(text))
+	_, err = os.Stat(filepath.Join(workspaceAnalyzePath(dir), "report.docx.p01.jpg"))
+	require.NoError(t, err)
+
+	listing := buildAnalyzeListing(entries)
+	require.Contains(t, listing, "- `report.docx` (10 B, document)\n")
+	require.Contains(t, listing, "  text: `report.docx.txt` (2 lines)\n")
+	require.Contains(t, listing, "  pages: `report.docx.p01.jpg` `report.docx.p02.jpg`\n")
+
+	// A rerun rebuilds .filestor/analyze from the cache without converters.
+	stubConvert(t, noBins, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatal("runCmd should not be called on a cache hit")
+		return nil, nil
+	})
+	entries = prepAnalyze(context.Background(), dir, files, nil)
+	require.Equal(t, "report.docx.txt", entries[0].Text)
+	require.Len(t, entries[0].Pages, 2)
+}
+
+func TestPrepAnalyzeVideo(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "scan.mp4"), []byte("fake mp4"), 0o644))
+
+	stubConvert(t, func(name string) (string, error) {
+		if name == "ffmpeg" {
+			return "/usr/bin/ffmpeg", nil
+		}
+		return "", errConvertUnavailable
+	}, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		require.Contains(t, name, "ffmpeg")
+		pattern := args[len(args)-1]
+		for i := 1; i <= 3; i++ {
+			require.NoError(t, os.WriteFile(fmt.Sprintf(pattern, i), []byte{0xff, 0xd8, 0xff, byte(i)}, 0o644))
+		}
+		return nil, nil
+	})
+
+	files, err := listWorkspaceFiles(dir)
+	require.NoError(t, err)
+	entries := prepAnalyze(context.Background(), dir, files, nil)
+	require.Len(t, entries, 1)
+	e := entries[0]
+	require.Equal(t, kindVideo, e.Kind)
+	require.False(t, e.Failed)
+	require.Equal(t, []string{"scan.mp4.f1.jpg", "scan.mp4.f2.jpg", "scan.mp4.f3.jpg"}, e.Frames)
+	_, err = os.Stat(filepath.Join(workspaceAnalyzePath(dir), "scan.mp4.f3.jpg"))
+	require.NoError(t, err)
+	require.Contains(t, buildAnalyzeListing(entries), "  frames: `scan.mp4.f1.jpg` `scan.mp4.f2.jpg` `scan.mp4.f3.jpg`\n")
+}
+
+func TestPrepAnalyzeVideoNoFFmpeg(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "scan.mp4"), []byte("fake mp4"), 0o644))
+	stubConvert(t, noBins, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatal("runCmd should not be called")
+		return nil, nil
+	})
+	files, err := listWorkspaceFiles(dir)
+	require.NoError(t, err)
+	entries := prepAnalyze(context.Background(), dir, files, nil)
+	require.True(t, entries[0].Failed)
+	require.Contains(t, buildAnalyzeListing(entries), "video) — conversion failed")
+}
+
+func TestPrepAnalyzeImages(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	png := append(append([]byte{}, pngSig...), []byte("rest")...)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pic.png"), png, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "photo.heic"), []byte("fake heic"), 0o644))
+	// Bigger than 8 MiB so the native jpeg path is skipped.
+	huge := make([]byte, analyzeImageMaxBytes+1)
+	huge[0], huge[1], huge[2] = 0xff, 0xd8, 0xff
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "big.jpg"), huge, 0o644))
+
+	stubConvert(t, func(name string) (string, error) {
+		if name == "magick" {
+			return "/usr/bin/magick", nil
+		}
+		return "", errConvertUnavailable
+	}, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		require.Contains(t, name, "magick")
+		out := args[len(args)-1]
+		return nil, os.WriteFile(out, []byte{0xff, 0xd8, 0xff, 0xd9}, 0o644)
+	})
+
+	files, err := listWorkspaceFiles(dir)
+	require.NoError(t, err)
+	entries := prepAnalyze(context.Background(), dir, files, nil)
+	require.Len(t, entries, 3)
+	byName := map[string]*analyzeEntry{}
+	for _, e := range entries {
+		byName[e.Name] = e
+	}
+	// A small native png needs no conversion and is not a failure.
+	require.Equal(t, kindImage, byName["pic.png"].Kind)
+	require.Empty(t, byName["pic.png"].Image)
+	require.False(t, byName["pic.png"].Failed)
+	// Non-native and oversized images get a normalized jpeg.
+	require.Equal(t, "photo.heic.jpg", byName["photo.heic"].Image)
+	require.Equal(t, "big.jpg.jpg", byName["big.jpg"].Image)
+	_, err = os.Stat(filepath.Join(workspaceAnalyzePath(dir), "photo.heic.jpg"))
+	require.NoError(t, err)
+}
+
+func TestPrepAnalyzeOtherBestEffort(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "model.stl"), []byte{'x', 0, 'y'}, 0o644))
+	// Larger than the best-effort cap: never even attempted.
+	huge := make([]byte, otherConvertMaxBytes+1)
+	huge[0] = 0
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "huge.bin"), huge, 0o644))
+
+	stubConvert(t, func(name string) (string, error) {
+		if name == "soffice" {
+			return "/usr/bin/soffice", nil
+		}
+		return "", errConvertUnavailable
+	}, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		src := args[len(args)-1]
+		require.Contains(t, src, "model.stl", "huge.bin must be skipped, not converted")
+		return nil, os.WriteFile(filepath.Join(outdirArg(t, args), "model.txt"), []byte("solid cube"), 0o644)
+	})
+
+	files, err := listWorkspaceFiles(dir)
+	require.NoError(t, err)
+	entries := prepAnalyze(context.Background(), dir, files, nil)
+	require.Len(t, entries, 2)
+	byName := map[string]*analyzeEntry{}
+	for _, e := range entries {
+		byName[e.Name] = e
+	}
+	require.Equal(t, "model.stl.txt", byName["model.stl"].Text)
+	require.Empty(t, byName["huge.bin"].Text)
+	listing := buildAnalyzeListing(entries)
+	require.Contains(t, listing, "  text: `model.stl.txt` (1 lines)\n")
+	require.Contains(t, listing, "`huge.bin` (64.0 MB, binary) — no readable form")
+}
+
+func TestPrepAnalyzeFailureDoesNotAbort(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "broken.docx"), []byte("PK broken"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "good.docx"), []byte("PK good"), 0o644))
+
+	stubConvert(t, func(name string) (string, error) {
+		if name == "soffice" {
+			return "/usr/bin/soffice", nil
+		}
+		return "", errConvertUnavailable
+	}, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		require.Contains(t, name, "soffice")
+		src := args[len(args)-1]
+		if strings.Contains(src, "broken") {
+			return nil, errors.New("boom")
+		}
+		format := "txt"
+		for i, a := range args {
+			if a == "--convert-to" && i+1 < len(args) {
+				format = args[i+1]
+			}
+		}
+		outdir := outdirArg(t, args)
+		if format == "pdf" {
+			return nil, errors.New("no pages in this test")
+		}
+		return nil, os.WriteFile(filepath.Join(outdir, "good.txt"), []byte("good body"), 0o644)
+	})
+
+	files, err := listWorkspaceFiles(dir)
+	require.NoError(t, err)
+	entries := prepAnalyze(context.Background(), dir, files, nil)
+	require.Len(t, entries, 2)
+	byName := map[string]*analyzeEntry{}
+	for _, e := range entries {
+		byName[e.Name] = e
+	}
+	// The broken file is marked but the good one still converted.
+	require.True(t, byName["broken.docx"].Failed)
+	require.Equal(t, "good.docx.txt", byName["good.docx"].Text)
+	require.Contains(t, buildAnalyzeListing(entries), "`broken.docx` (9 B, document) — conversion failed")
+}
+
+// newTestAgent builds an analyzeAgent over a temp workspace with the entries
+// indexed, without running an LLM.
+func newTestAgent(t *testing.T, dir string, entries []*analyzeEntry) *analyzeAgent {
+	t.Helper()
+	a := &analyzeAgent{dir: dir}
+	a.indexEntries(entries)
+	return a
+}
+
+func TestReadFileTool(t *testing.T) {
+	dir := t.TempDir()
+	var sb strings.Builder
+	for i := 1; i <= 1000; i++ {
+		fmt.Fprintf(&sb, "line %04d\n", i)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte(sb.String()), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "empty.txt"), nil, 0o644))
+	// A derived text form lives under .filestor/analyze.
+	require.NoError(t, os.MkdirAll(workspaceAnalyzePath(dir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceAnalyzePath(dir), "report.docx.txt"), []byte("doc body\n"), 0o644))
+
+	a := newTestAgent(t, dir, []*analyzeEntry{
+		{Name: "notes.txt", Kind: kindText},
+		{Name: "empty.txt", Kind: kindText},
+		{Name: "report.docx", Kind: kindDocument, Text: "report.docx.txt", TextLines: 1},
+		{Name: "pic.png", Kind: kindImage},
+	})
+
+	// Default page: first 200 lines.
+	out := a.toolReadFile("notes.txt", 0, 0)
+	require.Contains(t, out, "`notes.txt`: lines 1-200 of 1000\n")
+	require.Contains(t, out, "line 0001")
+	require.Contains(t, out, "line 0200")
+	require.NotContains(t, out, "line 0201")
+
+	// Paging with offset and limit.
+	out = a.toolReadFile("notes.txt", 990, 50)
+	require.Contains(t, out, "`notes.txt`: lines 990-1000 of 1000\n")
+	require.Contains(t, out, "line 1000")
+
+	// Limit is capped at 500.
+	out = a.toolReadFile("notes.txt", 1, 9999)
+	require.Contains(t, out, "`notes.txt`: lines 1-500 of 1000\n")
+
+	// Offset past the end.
+	out = a.toolReadFile("notes.txt", 5000, 10)
+	require.Contains(t, out, "offset 5000 is past the end")
+
+	// Empty file.
+	out = a.toolReadFile("empty.txt", 1, 10)
+	require.Contains(t, out, "is empty (0 lines)")
+
+	// The derived text form reads from .filestor/analyze.
+	out = a.toolReadFile("report.docx.txt", 1, 10)
+	require.Contains(t, out, "`report.docx.txt`: lines 1-1 of 1\ndoc body")
+
+	// A document source name errors and points at its text form.
+	out = a.toolReadFile("report.docx", 1, 10)
+	require.Contains(t, out, "error:")
+	require.Contains(t, out, "`report.docx.txt`")
+
+	// An image source name points at load_media.
+	out = a.toolReadFile("pic.png", 1, 10)
+	require.Contains(t, out, "error:")
+	require.Contains(t, out, "load_media")
+
+	// Unknown names and traversal fail.
+	require.Contains(t, a.toolReadFile("nope.txt", 1, 10), "no such file")
+	require.Contains(t, a.toolReadFile("../secret", 1, 10), "error:")
+}
+
+func TestReadFileToolCaps(t *testing.T) {
+	dir := t.TempDir()
+	// 600 lines of 200 chars: a 500-line page exceeds the 64 KiB reply cap,
+	// so trailing lines are dropped and the header says so.
+	var sb strings.Builder
+	for i := 1; i <= 600; i++ {
+		fmt.Fprintf(&sb, "row %04d %s\n", i, strings.Repeat("x", 190))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "wide.txt"), []byte(sb.String()), 0o644))
+
+	// A staging text file larger than readFileMaxBytes is flagged truncated.
+	big := append([]byte(strings.Repeat("a", readFileMaxBytes)), []byte("\ntail")...)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "big.txt"), big, 0o644))
+
+	a := newTestAgent(t, dir, []*analyzeEntry{
+		{Name: "wide.txt", Kind: kindText},
+		{Name: "big.txt", Kind: kindText},
+	})
+
+	out := a.toolReadFile("wide.txt", 1, 500)
+	require.Contains(t, out, "reply capped at 64.0 KB")
+	body := out[strings.IndexByte(out, '\n')+1:]
+	require.LessOrEqual(t, len(body), analyzeTextMaxBytes)
+
+	out = a.toolReadFile("big.txt", 1, 1)
+	require.Contains(t, out, "only the first 8.0 MB of the file are readable")
+}
+
+func TestLoadMediaTool(t *testing.T) {
 	dir := t.TempDir()
 	png := append(append([]byte{}, pngSig...), []byte("rest")...)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "pic.PNG"), png, 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pic.png"), png, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hi"), 0o644))
+	require.NoError(t, os.MkdirAll(workspaceAnalyzePath(dir), 0o755))
+	jpg := []byte{0xff, 0xd8, 0xff, 0xd9}
+	for _, n := range []string{"report.docx.p01.jpg", "report.docx.p02.jpg", "clip.mp4.f1.jpg", "photo.heic.jpg"} {
+		require.NoError(t, os.WriteFile(filepath.Join(workspaceAnalyzePath(dir), n), jpg, 0o644))
+	}
 
-	mime, data, err := readWorkspaceImage(context.Background(), dir, "pic.PNG")
-	require.NoError(t, err)
-	require.Equal(t, "image/png", mime)
-	require.Equal(t, png, data)
+	a := newTestAgent(t, dir, []*analyzeEntry{
+		{Name: "pic.png", Kind: kindImage},
+		{Name: "photo.heic", Kind: kindImage, Image: "photo.heic.jpg"},
+		{Name: "report.docx", Kind: kindDocument, Text: "report.docx.txt", Pages: []string{"report.docx.p01.jpg", "report.docx.p02.jpg"}},
+		{Name: "clip.mp4", Kind: kindVideo, Frames: []string{"clip.mp4.f1.jpg"}},
+		{Name: "notes.txt", Kind: kindText},
+		{Name: "model.stl", Kind: kindOther},
+	})
 
-	_, _, err = readWorkspaceImage(context.Background(), dir, "a.txt")
-	require.Error(t, err)
+	// A small native image loads straight from staging with its real mime.
+	label, imgs := a.toolLoadMedia("pic.png")
+	require.Equal(t, "loaded `pic.png`", label)
+	require.Len(t, imgs, 1)
+	require.Equal(t, "image/png", imgs[0].mime)
+
+	// A normalized image loads from .filestor/analyze.
+	label, imgs = a.toolLoadMedia("photo.heic")
+	require.Equal(t, "loaded `photo.heic.jpg`", label)
+	require.Len(t, imgs, 1)
+	require.Equal(t, "image/jpeg", imgs[0].mime)
+
+	// A document loads all its pages at once.
+	label, imgs = a.toolLoadMedia("report.docx")
+	require.Equal(t, "loaded 2 page(s) of `report.docx`", label)
+	require.Len(t, imgs, 2)
+
+	// A video loads its frames.
+	label, imgs = a.toolLoadMedia("clip.mp4")
+	require.Equal(t, "loaded 1 frame(s) of `clip.mp4`", label)
+	require.Len(t, imgs, 1)
+
+	// A single derived image name loads just that image.
+	label, imgs = a.toolLoadMedia("report.docx.p02.jpg")
+	require.Equal(t, "loaded `report.docx.p02.jpg`", label)
+	require.Len(t, imgs, 1)
+
+	// Errors: text goes to read_file, unknown names fail, binaries have no
+	// image form.
+	label, imgs = a.toolLoadMedia("notes.txt")
+	require.Contains(t, label, "read_file")
+	require.Empty(t, imgs)
+	label, _ = a.toolLoadMedia("report.docx.txt")
+	require.Contains(t, label, "read_file")
+	label, imgs = a.toolLoadMedia("nope.jpg")
+	require.Contains(t, label, "no such file")
+	require.Empty(t, imgs)
+	label, _ = a.toolLoadMedia("model.stl")
+	require.Contains(t, label, "no image form")
+	label, _ = a.toolLoadMedia("../secret")
+	require.Contains(t, label, "error")
+}
+
+func TestRunToolLoadMediaMultiParts(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(workspaceAnalyzePath(dir), 0o755))
+	jpg := []byte{0xff, 0xd8, 0xff, 0xd9}
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceAnalyzePath(dir), "doc.pdf.p01.jpg"), jpg, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceAnalyzePath(dir), "doc.pdf.p02.jpg"), jpg, 0o644))
+
+	a := newTestAgent(t, dir, []*analyzeEntry{
+		{Name: "doc.pdf", Kind: kindDocument, Pages: []string{"doc.pdf.p01.jpg", "doc.pdf.p02.jpg"}},
+	})
+	// All pages of a document ride in one user message with one image part
+	// per page, after the tool reply.
+	reply, extra := a.runTool(context.Background(), chatToolCall{
+		ID: "c1", Type: "function",
+		Function: chatFunctionCall{Name: "load_media", Arguments: json.RawMessage(`{"name":"doc.pdf"}`)},
+	})
+	require.Equal(t, "tool", reply.Role)
+	require.Equal(t, "c1", reply.ToolCallID)
+	require.Equal(t, "loaded 2 page(s) of `doc.pdf`", reply.Content)
+	require.Len(t, extra, 1)
+	parts, ok := extra[0].Content.([]chatPart)
+	require.True(t, ok)
+	require.Len(t, parts, 2)
+	for _, p := range parts {
+		require.Equal(t, "image_url", p.Type)
+		require.True(t, strings.HasPrefix(p.ImageURL.URL, "data:image/jpeg;base64,"))
+	}
 }
 
 func TestUploadAnalyzeUpstreamFailureNotEchoed(t *testing.T) {

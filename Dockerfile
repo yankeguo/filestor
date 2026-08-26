@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	poppler-utils \
 	pandoc \
 	catdoc \
+	ffmpeg \
 	fonts-noto-cjk \
 	&& rm -rf /var/lib/apt/lists/*
 COPY --from=builder /filestor /filestor

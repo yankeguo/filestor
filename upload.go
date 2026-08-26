@@ -22,12 +22,14 @@ const (
 	uploadNameQuery  = "name"
 
 	// workspaceMetaDir collects every non-staged file (draft state, atomic
-	// write temp files, conversion cache) under one dot-prefixed directory,
-	// so the workspace root only ever holds staged files.
+	// write temp files, conversion cache, analyze products) under one
+	// dot-prefixed directory, so the workspace root only ever holds staged
+	// files.
 	workspaceMetaDir   = ".filestor"
 	workspaceStateFile = "state.json"
 	workspaceTmpDir    = "tmp"
 	workspaceCacheDir  = "cache"
+	workspaceAnalyze   = "analyze"
 )
 
 var errInvalidWorkspaceName = errors.New("invalid file name")
@@ -78,8 +80,15 @@ func workspaceCachePath(dir string) string {
 	return filepath.Join(dir, workspaceMetaDir, workspaceCacheDir)
 }
 
+// workspaceAnalyzePath is the per-run directory of derived, model-readable
+// forms (hard links into the conversion cache), rebuilt by every analyze run.
+func workspaceAnalyzePath(dir string) string {
+	return filepath.Join(dir, workspaceMetaDir, workspaceAnalyze)
+}
+
 // prepWorkspace creates the .filestor meta directory and removes stale temp
-// files from interrupted writes and expired conversion cache entries.
+// files from interrupted writes, expired conversion cache entries, and the
+// previous run's analyze products.
 func prepWorkspace(dir string) error {
 	if err := os.MkdirAll(workspaceTmpPath(dir), 0o755); err != nil {
 		return err
@@ -92,8 +101,19 @@ func prepWorkspace(dir string) error {
 			_ = os.RemoveAll(filepath.Join(workspaceTmpPath(dir), e.Name()))
 		}
 	}
+	if err := resetAnalyzeDir(dir); err != nil {
+		return err
+	}
 	pruneConvertCache(dir)
 	return nil
+}
+
+// resetAnalyzeDir clears and recreates the analyze products directory.
+func resetAnalyzeDir(dir string) error {
+	if err := os.RemoveAll(workspaceAnalyzePath(dir)); err != nil {
+		return err
+	}
+	return os.MkdirAll(workspaceAnalyzePath(dir), 0o755)
 }
 
 func sanitizeWorkspaceName(name string) (string, error) {
