@@ -21,8 +21,8 @@ const (
 	analyzeBaseRounds       = 16
 	analyzeRoundsPerFile    = 1 // per staged file beyond the first
 	analyzeRoundsCap        = 64
-	analyzeBaseToolCalls    = 24
-	analyzeToolCallsPerFile = 2 // a read plus an occasional rename per extra file
+	analyzeBaseToolCalls    = 28 // reads plus a handful of digest marks
+	analyzeToolCallsPerFile = 2  // a read plus an occasional rename per extra file
 	analyzeToolCallsCap     = 256
 	analyzeTextMaxBytes     = 64 << 10
 	analyzeImageMaxBytes    = 8 << 20
@@ -45,6 +45,11 @@ const (
 	// message history (each is ~11MB); older ones are replaced by a
 	// placeholder.
 	analyzeMaxImages = 4
+	// Digest marks: at most analyzeDigestMaxTexts text chunks of
+	// analyzeDigestTextMaxBytes each, and analyzeDigestMaxImages images.
+	analyzeDigestMaxTexts     = 16
+	analyzeDigestTextMaxBytes = 8 << 10
+	analyzeDigestMaxImages    = 4
 )
 
 // analyzeBudget scales the round and tool-call budgets with the staged file
@@ -64,16 +69,20 @@ func analyzeBudget(files int) (rounds, toolCalls int) {
 // analyzeSystemPromptRaw uses ⟪⟫ as stand-ins for backticks: a Go raw string
 // cannot contain a literal backtick, and the prompt quotes file names in
 // `backticks` so the model can tell them apart from other text.
-const analyzeSystemPromptRaw = `You name a batch of staged files for upload: decide one short, descriptive title for the whole batch, and optionally the document datetime.
+const analyzeSystemPromptRaw = `You analyze a batch of staged files before upload: understand what the batch holds, then produce its metadata and a content digest.
 - The user message lists each staged file with its size and kind; indented under each source are its converted, model-readable forms: a ⟪name.txt⟫ full text with its line count, ⟪name.pNN.jpg⟫ rendered document pages, ⟪name.fN.jpg⟫ video frames, or ⟪name.jpg⟫ a normalized image. A native text file shows its line count and a one-line "peek" of its leading content instead. Names, peeks, and line counts are often enough — read only when you need more.
 - read_file(name, offset, limit) reads text in pages of lines: offset is the 1-based start line (default 1), limit the page size (default 200, at most 500; the reply itself is capped at 64 KiB), and the reply header reports "lines X-Y of N" so you can page on with the next offset. It accepts a staged text file or a derived ⟪name.txt⟫; calling it on a document, image, or video source name is an error — use that file's derived forms instead.
 - load_media(name) loads images for you to see: pass a staged image, document, or video name to load all its derived images (normalized image, rendered pages, extracted frames), or a single derived image name like ⟪report.docx.p01.jpg⟫.
 - When a document's text form is missing, empty, or too short to judge — a scanned or all-image document — load_media its page images instead.
-- Skip very large files (e.g. a video or PDF of several hundred MB): judge them by name instead; a huge file must not block your decision.
-- The title is a short phrase (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单".
-- If the contents contain a clear document date or datetime, call set_datetime with it (YYYY-MM-DD or YYYY-MM-DDTHH:mm), before or in the same turn as set_title. Do not guess.
-- If a staged file's name is clearly messy or uninformative — camera/scanner codes like ⟪IMG_2048.jpg⟫ or ⟪SCAN_0001.pdf⟫, timestamp-only screenshot names, random hashes, placeholder names like ⟪untitled⟫ or ⟪新建文档⟫, noise like ⟪final2⟫, ⟪copy of⟫, ⟪(1)⟫, or a name date that is redundant or contradicts the document's actual date — and you are confident about its content, call rename_file with a short, descriptive new name in the same language as the content. Use the document's actual date in the new name or drop the date entirely; never keep a date you know is wrong. Keep the extension; use only letters, digits, dash, underscore, dot; rename each file at most once; never pick a name another staged file already has. When in doubt, keep the original name — renaming is optional and must not delay set_title. Derived forms keep the original staged file name.
-- Call set_title exactly once with the raw title. Decide quickly: reading every file is rarely necessary. File names in messages are wrapped in ⟪backticks⟫; tool arguments take the bare name without backticks.`
+- Skip very large files (e.g. a video or PDF of several hundred MB): judge them by name instead; a huge file must not block your analysis.
+- Outputs, in any order:
+  - set_title: one short, descriptive title for the whole batch (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单". Required, exactly once.
+  - set_datetime: only if the contents contain a clear document date or datetime (YYYY-MM-DD or YYYY-MM-DDTHH:mm). Do not guess.
+  - mark_text: split the important text into small, independently indexable chunks — one call per chunk, each chunk self-contained without its surrounding context and focused on one topic. Quote the source text or tighten it slightly.
+  - mark_image: pick the content-bearing images worth indexing. Skip an image whose textual content your mark_text chunks already cover; mark the images that carry no text — or content the text flow could not extract — such as photos, diagrams, and scanned pages. Pass a single derived image name or a native staged image name.
+  - rename_file: only for a staged file whose name is clearly messy or uninformative — camera/scanner codes like ⟪IMG_2048.jpg⟫ or ⟪SCAN_0001.pdf⟫, timestamp-only screenshot names, random hashes, placeholder names like ⟪untitled⟫ or ⟪新建文档⟫, noise like ⟪final2⟫, ⟪copy of⟫, ⟪(1)⟫, or a name date that is redundant or contradicts the document's actual date — and you are confident about its content. Use a short, descriptive new name in the same language as the content; use the document's actual date in it or drop the date entirely, never keep a date you know is wrong. Keep the extension; use only letters, digits, dash, underscore, dot; rename each file at most once; never pick a name another staged file already has. When in doubt, keep the original name. Derived forms keep the original staged file name.
+- mark_text and mark_image build the batch's content digest, used later for search and embedding. When in doubt, mark less — but do mark the important content you have actually seen.
+- Call finish once when the analysis is complete; if you stop without calling finish you will be asked whether to continue or finish. Decide quickly: reading every file is rarely necessary. File names in messages are wrapped in ⟪backticks⟫; tool arguments take the bare name without backticks.`
 
 var analyzeSystemPrompt = strings.NewReplacer("⟪", "`", "⟫", "`").Replace(analyzeSystemPromptRaw)
 
@@ -153,8 +162,8 @@ func nameParamTool(name, description string) chatTool {
 	}}
 }
 
-var analyzeTools = []chatTool{
-	{Type: "function", Function: chatToolFunction{
+var (
+	analyzeToolReadFile = chatTool{Type: "function", Function: chatToolFunction{
 		Name: "read_file",
 		Description: `Read one page of lines from a staged text file or a derived "name.txt" text form; ` +
 			`the reply header reports "lines X-Y of N" so you can keep paging with offset.`,
@@ -167,9 +176,9 @@ var analyzeTools = []chatTool{
 			},
 			"required": []string{"name"},
 		},
-	}},
-	nameParamTool("load_media", "Load images to view: pass a staged image, document, or video name to load all its derived images (normalized image, rendered pages, extracted frames), or a single derived image name."),
-	{Type: "function", Function: chatToolFunction{
+	}}
+	analyzeToolLoadMedia = nameParamTool("load_media", "Load images to view: pass a staged image, document, or video name to load all its derived images (normalized image, rendered pages, extracted frames), or a single derived image name.")
+	analyzeToolRename    = chatTool{Type: "function", Function: chatToolFunction{
 		Name:        "rename_file",
 		Description: "Rename a staged file whose name is messy, uninformative, or carries a redundant or wrong date. Only when confident about the content; keep the extension unchanged.",
 		Parameters: map[string]any{
@@ -180,8 +189,21 @@ var analyzeTools = []chatTool{
 			},
 			"required": []string{"name", "new_name"},
 		},
-	}},
-	{Type: "function", Function: chatToolFunction{
+	}}
+	analyzeToolMarkText = chatTool{Type: "function", Function: chatToolFunction{
+		Name: "mark_text",
+		Description: `Mark one small, independently indexable text chunk as part of the batch's content digest for later search and embedding. ` +
+			`One call per chunk; keep each chunk self-contained and focused on one topic.`,
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"text": map[string]any{"type": "string", "description": "The text chunk: source text quoted or slightly tightened"},
+			},
+			"required": []string{"text"},
+		},
+	}}
+	analyzeToolMarkImage = nameParamTool("mark_image", "Mark one content-bearing image as part of the batch's content digest for later search and embedding: pass a single derived image name (a rendered page, extracted frame, or normalized image) or a native staged image name. Skip images whose content your marked text chunks already cover.")
+	analyzeToolSetTitle  = chatTool{Type: "function", Function: chatToolFunction{
 		Name:        "set_title",
 		Description: "Set the upload title. Call exactly once when you have decided.",
 		Parameters: map[string]any{
@@ -191,8 +213,8 @@ var analyzeTools = []chatTool{
 			},
 			"required": []string{"title"},
 		},
-	}},
-	{Type: "function", Function: chatToolFunction{
+	}}
+	analyzeToolSetDatetime = chatTool{Type: "function", Function: chatToolFunction{
 		Name:        "set_datetime",
 		Description: "Set the bundle time from a clear date or datetime found in the files. Do not guess.",
 		Parameters: map[string]any{
@@ -202,12 +224,39 @@ var analyzeTools = []chatTool{
 			},
 			"required": []string{"time"},
 		},
-	}},
+	}}
+	analyzeToolFinish = chatTool{Type: "function", Function: chatToolFunction{
+		Name:        "finish",
+		Description: "End the analysis. Call once when every output is done: the title is set and the important content is marked.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+	}}
+)
+
+// analyzeTools is the full tool set offered in the main loop.
+var analyzeTools = []chatTool{
+	analyzeToolReadFile,
+	analyzeToolLoadMedia,
+	analyzeToolRename,
+	analyzeToolMarkText,
+	analyzeToolMarkImage,
+	analyzeToolSetTitle,
+	analyzeToolSetDatetime,
+	analyzeToolFinish,
 }
 
-// analyzeDecisionTools are the only tools offered when forcing a decision
-// after the read budget is spent (set_title and set_datetime).
-var analyzeDecisionTools = analyzeTools[3:]
+// analyzeWrapUpTools are the only tools offered when wrapping up after the
+// read budget is spent: no file reading or renaming, only the outputs and
+// finish.
+var analyzeWrapUpTools = []chatTool{
+	analyzeToolSetTitle,
+	analyzeToolSetDatetime,
+	analyzeToolMarkText,
+	analyzeToolMarkImage,
+	analyzeToolFinish,
+}
 
 // analyzeAgent runs the chat-completions tool loop against the configured
 // OpenAI-compatible endpoint.
@@ -221,6 +270,13 @@ type analyzeAgent struct {
 	title        string
 	when         string
 	readsClosed  bool
+	// finished is set by the finish tool: the model declared the analysis
+	// complete and the loop ends.
+	finished bool
+	// Digest marks: how many text chunks were written and which image names
+	// were already marked (a repeated mark is not written twice).
+	digestTexts  int
+	digestImages map[string]bool
 	// entries maps the current staged name to its pre-converted forms;
 	// derived maps every product name in .filestor/analyze back to its entry.
 	entries    map[string]*analyzeEntry
@@ -564,11 +620,14 @@ func prepEntry(ctx context.Context, dir, analyzeDir string, f workspaceFile) *an
 	return e
 }
 
-// prepAnalyze rebuilds .filestor/analyze from scratch and pre-converts every
-// staged file, one progress event per file.
+// prepAnalyze rebuilds .filestor/analyze and .filestor/digest from scratch
+// and pre-converts every staged file, one progress event per file.
 func prepAnalyze(ctx context.Context, dir string, files []workspaceFile, progress func(jobProgress)) []*analyzeEntry {
 	if err := resetAnalyzeDir(dir); err != nil {
 		log.Println("reset analyze dir:", err)
+	}
+	if err := resetDigestDir(dir); err != nil {
+		log.Println("reset digest dir:", err)
 	}
 	analyzeDir := workspaceAnalyzePath(dir)
 	entries := make([]*analyzeEntry, 0, len(files))
@@ -655,6 +714,7 @@ func (a *analyzeAgent) indexEntries(list []*analyzeEntry) {
 func (a *analyzeAgent) run(ctx context.Context, files []workspaceFile) (string, error) {
 	list := prepAnalyze(ctx, a.dir, files, a.progress)
 	a.indexEntries(list)
+	a.digestImages = map[string]bool{}
 	messages := []chatMessage{
 		{Role: "system", Content: analyzeSystemPrompt},
 		{Role: "user", Content: buildAnalyzeListing(list)},
@@ -681,28 +741,44 @@ func (a *analyzeAgent) run(ctx context.Context, files []workspaceFile) (string, 
 		}
 		messages = append(messages, extra...)
 		trimImageMessages(messages)
-		if a.title != "" {
-			return a.title, nil
-		}
-		if len(msg.ToolCalls) == 0 || toolCalls >= a.maxToolCalls {
+		if a.finished || toolCalls >= a.maxToolCalls {
 			break
 		}
+		if len(msg.ToolCalls) == 0 {
+			// The model stopped without finish: nudge it to either keep
+			// analyzing or call finish, then go on to the next round.
+			messages = append(messages, chatMessage{Role: "user", Content: a.nudgeMessage()})
+		}
 	}
-	// The read budget is spent: force a decision instead of giving up.
+	if a.title != "" {
+		return a.title, nil
+	}
+	// No title yet (never set, or the budget ran out): force a wrap-up.
 	return a.finalize(ctx, messages)
 }
 
-// finalize closes file reading and asks for an immediate decision, so a large
+// nudgeMessage is appended when the model ends a round without any tool
+// call: it may either keep analyzing or end the run with finish. A missing
+// title is called out because set_title is a required output.
+func (a *analyzeAgent) nudgeMessage() string {
+	msg := "You have not called finish yet. Keep analyzing if anything is left, or call finish to end the analysis."
+	if a.title == "" {
+		msg += " The title is still missing: set_title is required before finishing."
+	}
+	return msg
+}
+
+// finalize closes file reading and asks for an immediate wrap-up, so a large
 // batch cannot exhaust the round budget without a title. A plain-text answer
 // is accepted as a last resort.
 func (a *analyzeAgent) finalize(ctx context.Context, messages []chatMessage) (string, error) {
 	a.readsClosed = true
 	messages = append(messages, chatMessage{
 		Role:    "user",
-		Content: "Stop reading files and decide now with what you have: call set_title with your best title (optionally set_datetime first).",
+		Content: "Stop reading files and wrap up now with what you have: call set_title with your best title (optionally set_datetime first), then call finish.",
 	})
-	a.progress(jobProgress{Message: "deciding"})
-	msg, err := a.chatMessage(ctx, &messages, analyzeDecisionTools)
+	a.progress(jobProgress{Message: "wrapping up"})
+	msg, err := a.chatMessage(ctx, &messages, analyzeWrapUpTools)
 	if err != nil {
 		return "", err
 	}
@@ -949,6 +1025,104 @@ func (a *analyzeAgent) toolLoadMedia(name string) (string, []loadedImage) {
 	return label, imgs
 }
 
+// toolMarkText answers one mark_text call: the model submits one small,
+// independently indexable text chunk, stored as its own file under
+// .filestor/digest for the later embedding step.
+func (a *analyzeAgent) toolMarkText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "error: empty text chunk"
+	}
+	if a.digestTexts >= analyzeDigestMaxTexts {
+		return fmt.Sprintf("error: the digest already holds %d text chunks; no more can be marked", analyzeDigestMaxTexts)
+	}
+	if len(text) > analyzeDigestTextMaxBytes {
+		text = text[:analyzeDigestTextMaxBytes]
+		for len(text) > 0 && !utf8.ValidString(text) {
+			text = text[:len(text)-1]
+		}
+	}
+	a.digestTexts++
+	name := fmt.Sprintf("text-%02d.txt", a.digestTexts)
+	if err := os.MkdirAll(workspaceDigestPath(a.dir), 0o755); err != nil {
+		return "error: " + err.Error()
+	}
+	if err := os.WriteFile(filepath.Join(workspaceDigestPath(a.dir), name), []byte(text), 0o644); err != nil {
+		a.digestTexts--
+		return "error: " + err.Error()
+	}
+	return fmt.Sprintf("marked text chunk %d/%d", a.digestTexts, analyzeDigestMaxTexts)
+}
+
+// toolMarkImage answers one mark_image call: a native staged image or a
+// single derived image (rendered page, extracted frame, normalized image) is
+// copied into .filestor/digest for the later embedding step. A document or
+// video source name stands for several images and is refused with a pointer
+// at its derived names.
+func (a *analyzeAgent) toolMarkImage(name string) string {
+	name, err := sanitizeWorkspaceName(name)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	var product, path string
+	if e := a.entries[name]; e != nil {
+		switch e.Kind {
+		case kindText:
+			return fmt.Sprintf("error: `%s` is text; mark its content with mark_text", name)
+		case kindImage:
+			if e.Image == "" {
+				product, path = e.Name, filepath.Join(a.dir, e.Name)
+			} else {
+				product, path = e.Image, filepath.Join(workspaceAnalyzePath(a.dir), e.Image)
+			}
+		case kindDocument:
+			return fmt.Sprintf("error: `%s` stands for %d page images; mark a single one by its derived name (e.g. `%s`)", name, len(e.Pages), firstOf(e.Pages))
+		case kindVideo:
+			return fmt.Sprintf("error: `%s` stands for %d frame images; mark a single one by its derived name (e.g. `%s`)", name, len(e.Frames), firstOf(e.Frames))
+		default:
+			return fmt.Sprintf("error: `%s` has no image form", name)
+		}
+	} else if _, ok := a.derived[name]; ok {
+		if strings.HasSuffix(name, ".txt") {
+			return fmt.Sprintf("error: `%s` is text; mark its content with mark_text", name)
+		}
+		product, path = name, filepath.Join(workspaceAnalyzePath(a.dir), name)
+	} else {
+		return fmt.Sprintf("error: no such file: `%s`", name)
+	}
+	if a.digestImages == nil {
+		a.digestImages = map[string]bool{}
+	}
+	if a.digestImages[product] {
+		return fmt.Sprintf("`%s` is already marked", product)
+	}
+	if len(a.digestImages) >= analyzeDigestMaxImages {
+		return fmt.Sprintf("error: the digest already holds %d images; no more can be marked", analyzeDigestMaxImages)
+	}
+	img, err := loadImageFile(path, product)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	if err := os.MkdirAll(workspaceDigestPath(a.dir), 0o755); err != nil {
+		return "error: " + err.Error()
+	}
+	out := fmt.Sprintf("image-%02d-%s", len(a.digestImages)+1, product)
+	if err := os.WriteFile(filepath.Join(workspaceDigestPath(a.dir), out), img.data, 0o644); err != nil {
+		return "error: " + err.Error()
+	}
+	a.digestImages[product] = true
+	return fmt.Sprintf("marked `%s` as digest image %d/%d", product, len(a.digestImages), analyzeDigestMaxImages)
+}
+
+// firstOf returns the first element of a non-empty list, or "" for an empty
+// one (a document or video entry with no derived images).
+func firstOf(list []string) string {
+	if len(list) == 0 {
+		return ""
+	}
+	return list[0]
+}
+
 // runTool executes one tool call and returns the tool reply plus any extra
 // user messages (the image payload for load_media). Callers must append all
 // replies of one assistant turn before the extras: strict OpenAI-compatible
@@ -964,6 +1138,7 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 		NewName string `json:"new_name"`
 		Title   string `json:"title"`
 		Time    string `json:"time"`
+		Text    string `json:"text"`
 		Offset  int    `json:"offset"`
 		Limit   int    `json:"limit"`
 	}
@@ -971,8 +1146,8 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 		return reply("invalid arguments: " + err.Error())
 	}
 	a.progress(jobProgress{Message: tc.Function.Name, File: args.Name})
-	if a.readsClosed && (tc.Function.Name == "read_file" || tc.Function.Name == "load_media") {
-		return reply("error: file reading is closed; call set_title now")
+	if a.readsClosed && (tc.Function.Name == "read_file" || tc.Function.Name == "load_media" || tc.Function.Name == "rename_file") {
+		return reply("error: file reading is closed; wrap up now")
 	}
 	switch tc.Function.Name {
 	case "read_file":
@@ -1008,6 +1183,13 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 			a.entries[newName] = e
 		}
 		return reply("renamed to `" + newName + "`")
+	case "mark_text":
+		return reply(a.toolMarkText(args.Text))
+	case "mark_image":
+		return reply(a.toolMarkImage(args.Name))
+	case "finish":
+		a.finished = true
+		return reply("analysis finished")
 	case "set_title":
 		// Apply the same sanitizing as the finalize plain-text fallback so
 		// the stored title always fits the push rules.

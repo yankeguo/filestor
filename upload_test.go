@@ -408,3 +408,55 @@ func TestRenameWorkspaceFile(t *testing.T) {
 		}
 	})
 }
+
+func TestDigestLifecycle(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	srv := NewServer(cfg, &fakeStore{})
+	h := srv.Handler()
+	cookie := loginCookie(t, h)
+	writeDigest := func() {
+		require.NoError(t, os.MkdirAll(workspaceDigestPath(dir), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(workspaceDigestPath(dir), "text-01.txt"), []byte("chunk"), 0o644))
+	}
+
+	// A changed staging set invalidates the analyze run: the digest dies with
+	// the analyzed flag.
+	postUploadFile(t, h, cookie, "a.txt")
+	require.NoError(t, srv.state.save(workspaceState{Time: "2026-08-24T06:59", Title: "t", Analyzed: true}))
+	writeDigest()
+	postUploadFile(t, h, cookie, "b.txt")
+	require.False(t, loadWorkspaceState(dir).Analyzed)
+	_, err := os.Stat(workspaceDigestPath(dir))
+	require.True(t, os.IsNotExist(err))
+
+	// Emptying the workspace clears the state and the digest with it.
+	writeDigest()
+	deleteUploadFile(t, h, cookie, "a.txt")
+	_, err = os.Stat(filepath.Join(workspaceDigestPath(dir), "text-01.txt"))
+	require.NoError(t, err, "digest survives while files stay staged")
+	deleteUploadFile(t, h, cookie, "b.txt")
+	require.Equal(t, workspaceState{}, loadWorkspaceState(dir))
+	_, err = os.Stat(workspaceDigestPath(dir))
+	require.True(t, os.IsNotExist(err))
+}
+
+func TestWorkspaceStateStoreDropsOrphanDigest(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(workspaceDigestPath(dir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceDigestPath(dir), "text-01.txt"), []byte("chunk"), 0o644))
+
+	// No state file: the leftover digest is orphaned and removed.
+	newWorkspaceStateStore(dir)
+	_, err := os.Stat(workspaceDigestPath(dir))
+	require.True(t, os.IsNotExist(err))
+
+	// With a state file the digest survives a restart like the state itself.
+	require.NoError(t, os.MkdirAll(workspaceDigestPath(dir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceDigestPath(dir), "text-01.txt"), []byte("chunk"), 0o644))
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Analyzed: true}))
+	w := newWorkspaceStateStore(dir)
+	require.True(t, w.get().Analyzed)
+	_, err = os.Stat(filepath.Join(workspaceDigestPath(dir), "text-01.txt"))
+	require.NoError(t, err)
+}

@@ -120,7 +120,7 @@ func TestUploadAnalyzeSuccess(t *testing.T) {
 			rq.Equal("test-model", req.Model)
 			rq.Equal("high", req.ReasoningEffort)
 			rq.Equal("Bearer token", r.Header.Get("Authorization"))
-			rq.Len(req.Tools, 5)
+			rq.Len(req.Tools, 8)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c1","type":"function","function":{"name":"read_file","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
 		case 2:
@@ -133,7 +133,8 @@ func TestUploadAnalyzeSuccess(t *testing.T) {
 			}
 			rq.True(found)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"weekly-report\"}"}}]}}]}`
+				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"weekly-report\"}"}},` +
+				`{"id":"c3","type":"function","function":{"name":"finish","arguments":"{}"}}]}}]}`
 		default:
 			rq.Failf("unexpected extra LLM call", "call %d", call)
 			return ""
@@ -185,7 +186,8 @@ func TestUploadAnalyzeRename(t *testing.T) {
 			}
 			rq.True(found)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-				`{"id":"c3","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"march-invoice\"}"}}]}}]}`
+				`{"id":"c3","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"march-invoice\"}"}},` +
+				`{"id":"c4","type":"function","function":{"name":"finish","arguments":"{}"}}]}}]}`
 		default:
 			rq.Failf("unexpected extra LLM call", "call %d", call)
 			return ""
@@ -240,7 +242,8 @@ func TestUploadAnalyzeImageTool(t *testing.T) {
 			}
 			rq.True(found)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"screenshot\"}"}}]}}]}`
+				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"screenshot\"}"}},` +
+				`{"id":"c3","type":"function","function":{"name":"finish","arguments":"{}"}}]}}]}`
 		default:
 			rq.Failf("unexpected extra LLM call", "call %d", call)
 			return ""
@@ -291,7 +294,8 @@ func TestUploadAnalyzeMultiImageRepliesStayConsecutive(t *testing.T) {
 			rq.Equal("user", ms[2].Role)
 			rq.Equal("user", ms[3].Role)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-				`{"id":"c3","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"photos\"}"}}]}}]}`
+				`{"id":"c3","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"photos\"}"}},` +
+				`{"id":"c4","type":"function","function":{"name":"finish","arguments":"{}"}}]}}]}`
 		default:
 			rq.Failf("unexpected extra LLM call", "call %d", call)
 			return ""
@@ -312,10 +316,23 @@ func TestUploadAnalyzeTextAnswerFallback(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
 	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		if call == 2 {
-			// The forced-decision round only offers set_title/set_datetime.
-			rq.Len(req.Tools, 2)
+			// Stopping without finish nudges the model and continues with the
+			// full tool set.
+			rq.Len(req.Tools, 8)
+			nudged := false
+			for _, m := range req.Messages {
+				if s, ok := m.Content.(string); ok && m.Role == "user" && strings.Contains(s, "call finish") {
+					nudged = true
+				}
+			}
+			rq.True(nudged)
 		}
-		// The model never calls set_title and answers in plain text.
+		if call == analyzeBaseRounds+1 {
+			// The round budget is spent: the forced wrap-up round drops the
+			// read tools.
+			rq.Len(req.Tools, 5)
+		}
+		// The model never calls a tool and answers in plain text.
 		return `{"choices":[{"message":{"role":"assistant","content":"weekly-report"}}]}`
 	})
 	cfg.LLM.Chat.OpenAI = OpenAIChatConfig{URL: srv.URL, Model: "test-model"}
@@ -361,10 +378,10 @@ func TestUploadAnalyzeRoundBudgetForcesDecision(t *testing.T) {
 				`{"id":"c","type":"function","function":{"name":"read_file","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
 		}
 		rq.Equal(analyzeBaseRounds+1, call)
-		rq.Len(req.Tools, 2, "forced round drops the read tools")
+		rq.Len(req.Tools, 5, "forced round drops the read tools")
 		nudged := false
 		for _, m := range req.Messages {
-			if s, ok := m.Content.(string); ok && m.Role == "user" && strings.Contains(s, "decide now") {
+			if s, ok := m.Content.(string); ok && m.Role == "user" && strings.Contains(s, "wrap up now") {
 				nudged = true
 			}
 		}
@@ -428,7 +445,8 @@ func TestUploadAnalyzePeeks(t *testing.T) {
 		rq.Equal(1, strings.Count(list, "peek:"))
 		rq.Contains(list, "`bin.dat` (3 B, binary) — no readable form")
 		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"q3-report\"}"}}]}}]}`
+			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"q3-report\"}"}},` +
+			`{"id":"c2","type":"function","function":{"name":"finish","arguments":"{}"}}]}}]}`
 	})
 	cfg.LLM.Chat.OpenAI = OpenAIChatConfig{URL: srv.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
@@ -481,7 +499,8 @@ func TestUploadAnalyzeObjectArguments(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("hi"), 0o644))
 	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":{"title":"from-object"}}}]}}]}`
+			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":{"title":"from-object"}}},` +
+			`{"id":"c2","type":"function","function":{"name":"finish","arguments":"{}"}}]}}]}`
 	})
 	cfg.LLM.Chat.OpenAI = OpenAIChatConfig{URL: srv.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
@@ -521,7 +540,8 @@ func TestUploadAnalyzeSetDatetime(t *testing.T) {
 				`{"id":"c1","type":"function","function":{"name":"set_datetime","arguments":"{\"time\":\"2026-08-20\"}"}}]}}]}`
 		case 2:
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"invoice\"}"}}]}}]}`
+				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"invoice\"}"}},` +
+				`{"id":"c3","type":"function","function":{"name":"finish","arguments":"{}"}}]}}]}`
 		default:
 			rq.Failf("unexpected extra LLM call", "call %d", call)
 			return ""
@@ -559,7 +579,8 @@ func TestUploadAnalyzeInvalidDatetimeKeepsPinnedTime(t *testing.T) {
 			}
 			rq.True(found)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"ok\"}"}}]}}]}`
+				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"ok\"}"}},` +
+				`{"id":"c3","type":"function","function":{"name":"finish","arguments":"{}"}}]}}]}`
 		default:
 			rq.Failf("unexpected extra LLM call", "call %d", call)
 			return ""
@@ -601,7 +622,8 @@ func TestWorkspaceLockDuringAnalyze(t *testing.T) {
 	llm := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		<-block
 		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
-			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"ok\"}"}}]}}]}`
+			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"ok\"}"}},` +
+			`{"id":"c2","type":"function","function":{"name":"finish","arguments":"{}"}}]}}]}`
 	})
 	cfg.LLM.Chat.OpenAI = OpenAIChatConfig{URL: llm.URL, Model: "test-model"}
 	app := NewServer(cfg, &fakeStore{})
@@ -1126,4 +1148,136 @@ func TestUploadAnalyzeUpstreamFailureNotEchoed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUploadAnalyzeDigest(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello world"), 0o644))
+	png := append(append([]byte{}, pngSig...), []byte("rest")...)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pic.png"), png, 0o644))
+
+	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
+		rq.Equal(1, call)
+		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
+			`{"id":"c1","type":"function","function":{"name":"mark_text","arguments":"{\"text\":\"hello world overview\"}"}},` +
+			`{"id":"c2","type":"function","function":{"name":"mark_image","arguments":"{\"name\":\"pic.png\"}"}},` +
+			`{"id":"c3","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"greeting\"}"}},` +
+			`{"id":"c4","type":"function","function":{"name":"finish","arguments":"{}"}}]}}]}`
+	})
+	cfg.LLM.Chat.OpenAI = OpenAIChatConfig{URL: srv.URL, Model: "test-model"}
+	app := NewServer(cfg, &fakeStore{})
+	h := app.Handler()
+	cookie := loginCookie(t, h)
+	require.Equal(t, http.StatusAccepted, postAnalyze(t, h, cookie).Code)
+	awaitIdle(t, app)
+	require.Equal(t, "greeting", loadWorkspaceState(dir).Title)
+
+	// The marks landed in .filestor/digest: one txt per text chunk, one file
+	// per image.
+	data, err := os.ReadFile(filepath.Join(workspaceDigestPath(dir), "text-01.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "hello world overview", string(data))
+	data, err = os.ReadFile(filepath.Join(workspaceDigestPath(dir), "image-01-pic.png"))
+	require.NoError(t, err)
+	require.Equal(t, png, data)
+}
+
+func TestMarkTextTool(t *testing.T) {
+	dir := t.TempDir()
+	a := newTestAgent(t, dir, nil)
+
+	require.Equal(t, "marked text chunk 1/16", a.toolMarkText("first chunk"))
+	require.Equal(t, "marked text chunk 2/16", a.toolMarkText(" second chunk "))
+
+	data, err := os.ReadFile(filepath.Join(workspaceDigestPath(dir), "text-01.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "first chunk", string(data))
+	data, err = os.ReadFile(filepath.Join(workspaceDigestPath(dir), "text-02.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "second chunk", string(data))
+
+	// Empty chunks are refused.
+	require.Contains(t, a.toolMarkText("  "), "error:")
+
+	// An oversized chunk is truncated to the per-chunk cap.
+	require.Equal(t, "marked text chunk 3/16", a.toolMarkText(strings.Repeat("x", analyzeDigestTextMaxBytes+100)))
+	data, err = os.ReadFile(filepath.Join(workspaceDigestPath(dir), "text-03.txt"))
+	require.NoError(t, err)
+	require.Len(t, data, analyzeDigestTextMaxBytes)
+
+	// The cap refuses further chunks.
+	a.digestTexts = analyzeDigestMaxTexts
+	require.Contains(t, a.toolMarkText("one more"), "no more can be marked")
+}
+
+func TestMarkImageTool(t *testing.T) {
+	dir := t.TempDir()
+	png := append(append([]byte{}, pngSig...), []byte("rest")...)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pic.png"), png, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hi"), 0o644))
+	require.NoError(t, os.MkdirAll(workspaceAnalyzePath(dir), 0o755))
+	jpg := []byte{0xff, 0xd8, 0xff, 0xd9}
+	for _, n := range []string{"report.docx.p01.jpg", "report.docx.p02.jpg", "clip.mp4.f1.jpg", "photo.heic.jpg"} {
+		require.NoError(t, os.WriteFile(filepath.Join(workspaceAnalyzePath(dir), n), jpg, 0o644))
+	}
+
+	a := newTestAgent(t, dir, []*analyzeEntry{
+		{Name: "pic.png", Kind: kindImage},
+		{Name: "photo.heic", Kind: kindImage, Image: "photo.heic.jpg"},
+		{Name: "report.docx", Kind: kindDocument, Pages: []string{"report.docx.p01.jpg", "report.docx.p02.jpg"}},
+		{Name: "clip.mp4", Kind: kindVideo, Frames: []string{"clip.mp4.f1.jpg"}},
+		{Name: "notes.txt", Kind: kindText},
+		{Name: "model.stl", Kind: kindOther},
+	})
+
+	// A native staged image copies straight from staging.
+	require.Equal(t, "marked `pic.png` as digest image 1/4", a.toolMarkImage("pic.png"))
+	data, err := os.ReadFile(filepath.Join(workspaceDigestPath(dir), "image-01-pic.png"))
+	require.NoError(t, err)
+	require.Equal(t, png, data)
+
+	// A single derived image name, and a converted image by its source name.
+	require.Equal(t, "marked `report.docx.p01.jpg` as digest image 2/4", a.toolMarkImage("report.docx.p01.jpg"))
+	require.Equal(t, "marked `photo.heic.jpg` as digest image 3/4", a.toolMarkImage("photo.heic"))
+	data, err = os.ReadFile(filepath.Join(workspaceDigestPath(dir), "image-03-photo.heic.jpg"))
+	require.NoError(t, err)
+	require.Equal(t, jpg, data)
+
+	// A repeated mark is not written twice.
+	require.Equal(t, "`pic.png` is already marked", a.toolMarkImage("pic.png"))
+
+	// A document/video source name stands for several images: refused with a
+	// pointer at the derived names.
+	out := a.toolMarkImage("report.docx")
+	require.Contains(t, out, "error:")
+	require.Contains(t, out, "report.docx.p01.jpg")
+	require.Contains(t, a.toolMarkImage("clip.mp4"), "error:")
+
+	// Text, unknown names, and binaries fail.
+	require.Contains(t, a.toolMarkImage("notes.txt"), "mark_text")
+	require.Contains(t, a.toolMarkImage("nope.jpg"), "no such file")
+	require.Contains(t, a.toolMarkImage("model.stl"), "no image form")
+	require.Contains(t, a.toolMarkImage("../secret"), "error:")
+
+	// The cap refuses further images.
+	require.Equal(t, "marked `clip.mp4.f1.jpg` as digest image 4/4", a.toolMarkImage("clip.mp4.f1.jpg"))
+	require.Contains(t, a.toolMarkImage("report.docx.p02.jpg"), "no more can be marked")
+}
+
+func TestPrepAnalyzeResetsDigest(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
+	require.NoError(t, os.MkdirAll(workspaceDigestPath(dir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceDigestPath(dir), "text-01.txt"), []byte("stale"), 0o644))
+
+	files, err := listWorkspaceFiles(dir)
+	require.NoError(t, err)
+	prepAnalyze(context.Background(), dir, files, nil)
+
+	// The digest directory is rebuilt empty for the new run.
+	entries, err := os.ReadDir(workspaceDigestPath(dir))
+	require.NoError(t, err)
+	require.Empty(t, entries)
 }

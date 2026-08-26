@@ -22,14 +22,15 @@ const (
 	uploadNameQuery  = "name"
 
 	// workspaceMetaDir collects every non-staged file (draft state, atomic
-	// write temp files, conversion cache, analyze products) under one
-	// dot-prefixed directory, so the workspace root only ever holds staged
-	// files.
+	// write temp files, conversion cache, analyze products, digest marks)
+	// under one dot-prefixed directory, so the workspace root only ever
+	// holds staged files.
 	workspaceMetaDir   = ".filestor"
 	workspaceStateFile = "state.json"
 	workspaceTmpDir    = "tmp"
 	workspaceCacheDir  = "cache"
 	workspaceAnalyze   = "analyze"
+	workspaceDigest    = "digest"
 )
 
 var errInvalidWorkspaceName = errors.New("invalid file name")
@@ -86,6 +87,13 @@ func workspaceAnalyzePath(dir string) string {
 	return filepath.Join(dir, workspaceMetaDir, workspaceAnalyze)
 }
 
+// workspaceDigestPath is the directory of content digest marks (text chunks
+// and representative images picked by the analyze run) kept for the later
+// embedding step. It lives and dies with the draft state.
+func workspaceDigestPath(dir string) string {
+	return filepath.Join(dir, workspaceMetaDir, workspaceDigest)
+}
+
 // prepWorkspace creates the .filestor meta directory and removes stale temp
 // files from interrupted writes, expired conversion cache entries, and the
 // previous run's analyze products.
@@ -114,6 +122,15 @@ func resetAnalyzeDir(dir string) error {
 		return err
 	}
 	return os.MkdirAll(workspaceAnalyzePath(dir), 0o755)
+}
+
+// resetDigestDir clears and recreates the digest marks directory: a new
+// analyze run rebuilds the marks from scratch.
+func resetDigestDir(dir string) error {
+	if err := os.RemoveAll(workspaceDigestPath(dir)); err != nil {
+		return err
+	}
+	return os.MkdirAll(workspaceDigestPath(dir), 0o755)
 }
 
 func sanitizeWorkspaceName(name string) (string, error) {
@@ -278,6 +295,8 @@ func newWorkspaceStateStore(dir string) *workspaceStateStore {
 	w := &workspaceStateStore{dir: dir}
 	data, err := os.ReadFile(workspaceStatePath(dir))
 	if err != nil {
+		// No draft state: leftover digest marks are orphaned.
+		_ = os.RemoveAll(workspaceDigestPath(dir))
 		return w
 	}
 	var st workspaceState
@@ -285,6 +304,7 @@ func newWorkspaceStateStore(dir string) *workspaceStateStore {
 		// A corrupt state file is treated as absent: an exists=true store
 		// holding a zero state would make pin() a permanent no-op.
 		log.Println("load workspace state:", err)
+		_ = os.RemoveAll(workspaceDigestPath(dir))
 		return w
 	}
 	w.exists = true
@@ -310,11 +330,13 @@ func (w *workspaceStateStore) save(st workspaceState) error {
 	return nil
 }
 
-// clear removes the state file (staging emptied) and zeroes memory.
+// clear removes the state file (staging emptied) and zeroes memory; the
+// digest marks die with the draft state.
 func (w *workspaceStateStore) clear() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	_ = os.Remove(workspaceStatePath(w.dir))
+	_ = os.RemoveAll(workspaceDigestPath(w.dir))
 	w.state = workspaceState{}
 	w.exists = false
 }
@@ -337,8 +359,9 @@ func (w *workspaceStateStore) pin() {
 }
 
 // markUnanalyzed clears the analyzed flag after the staged file set changes
-// (file added or deleted), so a push requires a fresh analyze run. It is a
-// no-op when no state exists yet.
+// (file added or deleted), so a push requires a fresh analyze run; the digest
+// marks refer to the old batch and are dropped with it. It is a no-op when no
+// state exists yet.
 func (w *workspaceStateStore) markUnanalyzed() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -352,6 +375,7 @@ func (w *workspaceStateStore) markUnanalyzed() {
 		return
 	}
 	w.state = st
+	_ = os.RemoveAll(workspaceDigestPath(w.dir))
 }
 
 // clearWorkspaceStateIfEmpty drops the draft state once staging is empty.
