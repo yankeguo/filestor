@@ -47,14 +47,14 @@ func analyzeBudget(files int) (rounds, toolCalls int) {
 // analyzeSystemPromptRaw uses ⟪⟫ as stand-ins for backticks: a Go raw string
 // cannot contain a literal backtick, and the prompt quotes file names in
 // `backticks` so the model can tell them apart from other text.
-const analyzeSystemPromptRaw = `You invent a short, descriptive title for a batch of staged files that will be uploaded to object storage as one bundle (id, title, and datetime are stored in bundle metadata and a monthly index).
-- The file list may include a one-line "peek" at each text file's leading content; often the names and peeks are already enough — use the read tools only when you need more.
-- The file list shows each file's size. If a file is very large (e.g. a PDF of several hundred MB), do not read or convert it — judge it by its name alone and move on; skipping a huge file must not block your decision.
+const analyzeSystemPromptRaw = `You name a batch of staged files for upload: decide one short, descriptive title for the whole batch, and optionally the document datetime.
+- The user message lists each staged file with its size, plus a one-line "peek" at each text file's leading content. Names and peeks are often enough — use the read tools only when you need more.
+- Skip very large files (e.g. a PDF of several hundred MB): judge them by name instead of reading or converting them; a huge file must not block your decision.
 - read_file_as_text and read_file_as_image convert office documents, PDFs, and other formats automatically; you do not need to care about the conversion.
-- The title should be a short phrase (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单".
-- If the contents contain a clear document date or datetime, call set_datetime with it (YYYY-MM-DD or YYYY-MM-DDTHH:mm). Do not guess. Call it before or in the same turn as set_title.
-- If a staged file's name is clearly messy or uninformative — camera/scanner codes like ⟪IMG_2048.jpg⟫ or ⟪SCAN_0001.pdf⟫, timestamp-only screenshot names, random hashes, placeholder names like ⟪untitled⟫ or ⟪新建文档⟫, redundant noise like ⟪final2⟫, ⟪copy of⟫, ⟪(1)⟫, or a date in the name that is redundant or contradicts the document's actual date — and you are confident about its content (from the name, peek, or a read), call rename_file with a short, descriptive new name in the same language as the content. When the name carries a wrong or pointless date, use the document's actual date in the new name or drop the date entirely; never keep a date you know is wrong. Keep the extension unchanged; use only letters, digits, dash, underscore, dot; rename each file at most once; never pick a name another staged file already has. When in doubt, keep the original name — renaming is optional and must not delay set_title.
-- When you have decided, call set_title exactly once with the raw title. Decide quickly: reading every file is rarely necessary. In messages, file names are always wrapped in ⟪backticks⟫ so you can tell them apart from other text; tool arguments take the bare name without backticks.`
+- The title is a short phrase (at most 40 characters) in the same language as the content, e.g. "weekly-report" or "月度账单".
+- If the contents contain a clear document date or datetime, call set_datetime with it (YYYY-MM-DD or YYYY-MM-DDTHH:mm), before or in the same turn as set_title. Do not guess.
+- If a staged file's name is clearly messy or uninformative — camera/scanner codes like ⟪IMG_2048.jpg⟫ or ⟪SCAN_0001.pdf⟫, timestamp-only screenshot names, random hashes, placeholder names like ⟪untitled⟫ or ⟪新建文档⟫, noise like ⟪final2⟫, ⟪copy of⟫, ⟪(1)⟫, or a name date that is redundant or contradicts the document's actual date — and you are confident about its content, call rename_file with a short, descriptive new name in the same language as the content. Use the document's actual date in the new name or drop the date entirely; never keep a date you know is wrong. Keep the extension; use only letters, digits, dash, underscore, dot; rename each file at most once; never pick a name another staged file already has. When in doubt, keep the original name — renaming is optional and must not delay set_title.
+- Call set_title exactly once with the raw title. Decide quickly: reading every file is rarely necessary. File names in messages are wrapped in ⟪backticks⟫; tool arguments take the bare name without backticks.`
 
 var analyzeSystemPrompt = strings.NewReplacer("⟪", "`", "⟫", "`").Replace(analyzeSystemPromptRaw)
 
@@ -127,7 +127,7 @@ func nameParamTool(name, description string) chatTool {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "File name from the staged file list"},
+				"name": map[string]any{"type": "string", "description": "Staged file name, without backticks"},
 			},
 			"required": []string{"name"},
 		},
@@ -135,15 +135,15 @@ func nameParamTool(name, description string) chatTool {
 }
 
 var analyzeTools = []chatTool{
-	nameParamTool("read_file_as_text", "Read a staged file as text. Office documents and PDFs are converted automatically."),
-	nameParamTool("read_file_as_image", "Load a staged file as an image (jpeg/png/gif). Oversized or other formats are converted automatically."),
+	nameParamTool("read_file_as_text", "Read a staged file as text; office documents and PDFs are converted automatically."),
+	nameParamTool("read_file_as_image", "Load a staged file as an image to view it; oversized or non-jpeg/png/gif files are converted automatically."),
 	{Type: "function", Function: chatToolFunction{
 		Name:        "rename_file",
 		Description: "Rename a staged file whose name is messy, uninformative, or carries a redundant or wrong date. Only when confident about the content; keep the extension unchanged.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":     map[string]any{"type": "string", "description": "File name from the staged file list"},
+				"name":     map[string]any{"type": "string", "description": "Staged file name, without backticks"},
 				"new_name": map[string]any{"type": "string", "description": "Short, descriptive new file name with the original extension"},
 			},
 			"required": []string{"name", "new_name"},
