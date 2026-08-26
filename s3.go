@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -12,13 +13,19 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 )
 
 const (
 	listPageSize  = 200
 	signURLTTL    = 5 * time.Minute
 	listDelimiter = "/"
+	// getMaxBytes caps metadata reads (monthly indexes and .meta.json).
+	getMaxBytes = 1 << 20
 )
+
+var errNotFound = errors.New("not found")
 
 type ObjectInfo struct {
 	Key          string
@@ -35,6 +42,7 @@ type ListPage struct {
 
 type ObjectStore interface {
 	List(prefix, marker string) (ListPage, error)
+	Get(key string) ([]byte, error)
 	SignGetURL(key string, ttl time.Duration) (string, error)
 	SignPreviewURL(key string, ttl time.Duration) (string, error)
 	Put(key string, r io.Reader, size int64) error
@@ -93,6 +101,47 @@ func (s *s3Store) List(prefix, marker string) (ListPage, error) {
 	// No ContinuationToken plumbing: StartAfter on the last listed key or
 	// common prefix (see pageNextMarker) resumes the listing just as well.
 	return page, nil
+}
+
+func (s *s3Store) Get(key string) ([]byte, error) {
+	out, err := s.client.GetObject(context.Background(), &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if isS3NotFound(err) {
+			return nil, errNotFound
+		}
+		return nil, err
+	}
+	defer out.Body.Close()
+	if out.ContentLength != nil && *out.ContentLength > getMaxBytes {
+		_, _ = io.Copy(io.Discard, out.Body)
+		return nil, fmt.Errorf("object too large")
+	}
+	data, err := io.ReadAll(io.LimitReader(out.Body, getMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > getMaxBytes {
+		return nil, fmt.Errorf("object too large")
+	}
+	return data, nil
+}
+
+func isS3NotFound(err error) bool {
+	var nsk *types.NoSuchKey
+	if errors.As(err, &nsk) {
+		return true
+	}
+	var api smithy.APIError
+	if errors.As(err, &api) {
+		switch api.ErrorCode() {
+		case "NoSuchKey", "NotFound":
+			return true
+		}
+	}
+	return false
 }
 
 func (s *s3Store) Put(key string, r io.Reader, size int64) error {

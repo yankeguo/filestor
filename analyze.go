@@ -47,7 +47,7 @@ func analyzeBudget(files int) (rounds, toolCalls int) {
 // analyzeSystemPromptRaw uses ⟪⟫ as stand-ins for backticks: a Go raw string
 // cannot contain a literal backtick, and the prompt quotes file names in
 // `backticks` so the model can tell them apart from other text.
-const analyzeSystemPromptRaw = `You invent a short, descriptive title for a batch of staged files that will be uploaded to object storage under a bundle directory named "YYYYMMDDhhmm-TITLE/".
+const analyzeSystemPromptRaw = `You invent a short, descriptive title for a batch of staged files that will be uploaded to object storage as one bundle (id, title, and datetime are stored in bundle metadata and a monthly index).
 - The file list may include a one-line "peek" at each text file's leading content; often the names and peeks are already enough — use the read tools only when you need more.
 - The file list shows each file's size. If a file is very large (e.g. a PDF of several hundred MB), do not read or convert it — judge it by its name alone and move on; skipping a huge file must not block your decision.
 - read_file_as_text and read_file_as_image convert office documents, PDFs, and other formats automatically; you do not need to care about the conversion.

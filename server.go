@@ -137,7 +137,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		s.render(w, "home.html", data)
 		return
 	}
-	// Calendar view over the fixed bundle layout (YYYY/MM/YYYYMMDDhhmm-TITLE/).
+	// Calendar view over monthly indexes (index/YYYY/YYYY-MM.json).
 	now := time.Now()
 	var day time.Time
 	if d := q.Get("day"); d != "" {
@@ -166,13 +166,13 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	} else if !day.IsZero() && (day.Year() != month.Year() || day.Month() != month.Month()) {
 		day = time.Time{}
 	}
-	dirs, err := listYearDirs(s.store, month.Year())
+	bundles, err := listYearBundles(s.store, month.Year())
 	if err != nil {
 		log.Println("list objects:", err)
 		http.Error(w, "list failed", http.StatusBadGateway)
 		return
 	}
-	s.render(w, "home.html", buildBrowseCalendar(month, day, dirs, now))
+	s.render(w, "home.html", buildBrowseCalendar(month, day, bundles, now))
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {

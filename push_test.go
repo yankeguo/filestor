@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -53,9 +54,8 @@ func TestSanitizePushTitleTruncates(t *testing.T) {
 	require.Len(t, []rune(got), pushTitleMaxRunes)
 }
 
-func TestPushPrefix(t *testing.T) {
-	when := time.Date(2026, 8, 24, 6, 59, 0, 0, time.UTC)
-	require.Equal(t, "2026/08/202608240659-title", pushPrefix(when, "title"))
+func TestBundlePrefixPath(t *testing.T) {
+	require.Equal(t, "content/55/0e/"+testBundleID1, bundlePrefix(testBundleID1))
 }
 
 func postPush(t *testing.T, h http.Handler, cookie *http.Cookie, when, title string) *httptest.ResponseRecorder {
@@ -111,15 +111,32 @@ func TestUploadPushSuccess(t *testing.T) {
 	awaitIdle(t, srv)
 	st := srv.lastJob()
 	require.Empty(t, st.Error)
-	require.Equal(t, "2026/08/202608240659-weekly-report/", st.Prefix)
+	require.True(t, strings.HasPrefix(st.Prefix, "content/"))
+	require.True(t, strings.HasSuffix(st.Prefix, "/"))
+	id, ok := parseBundleID(st.Prefix)
+	require.True(t, ok)
 	require.Equal(t, 2, st.Total)
 	require.Equal(t, 2, st.Done)
 	require.Equal(t, int64(5), st.TotalBytes)
 	require.Equal(t, int64(5), st.DoneBytes)
 	require.Equal(t, []string{
-		"2026/08/202608240659-weekly-report/a.txt",
-		"2026/08/202608240659-weekly-report/b.txt",
+		bundlePrefix(id) + "/" + bundleMetaName,
+		bundlePrefix(id) + "/a.txt",
+		bundlePrefix(id) + "/b.txt",
+		"index/2026/2026-08.json",
 	}, store.putKeys())
+
+	raw, err := store.Get(bundleMetaKey(id))
+	require.NoError(t, err)
+	var meta bundleMeta
+	require.NoError(t, json.Unmarshal(raw, &meta))
+	require.Equal(t, bundleMeta{ID: id, Title: "weekly-report", Time: "2026-08-24T06:59"}, meta)
+
+	idx, err := store.Get("index/2026/2026-08.json")
+	require.NoError(t, err)
+	var listed []bundleMeta
+	require.NoError(t, json.Unmarshal(idx, &listed))
+	require.Equal(t, []bundleMeta{meta}, listed)
 
 	// Uploaded files are removed from the staging workspace (the .filestor
 	// meta directory stays behind).
@@ -235,18 +252,48 @@ func TestUploadPushFailureKeepsFiles(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
 	awaitIdle(t, srv)
 	st := srv.lastJob()
-	require.Contains(t, st.Error, "a.txt")
+	require.Contains(t, st.Error, bundleMetaName)
 	require.Contains(t, st.Error, "oss down")
 
 	// The failed file stays staged.
 	_, err := os.Stat(filepath.Join(cfg.Upload.Workspace, "a.txt"))
 	require.NoError(t, err)
+	require.Empty(t, store.putKeys())
 
 	// A later push can start over.
 	store.putErr = nil
 	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
 	awaitIdle(t, srv)
 	require.Empty(t, srv.lastJob().Error)
+}
+
+func TestUploadPushFileFailureSkipsIndex(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("aaa"), 0o644))
+	store := &fakeStore{}
+	store.putHook = func(key string) {
+		if strings.HasSuffix(key, "/a.txt") {
+			store.putErr = errors.New("oss down")
+		}
+	}
+	srv := NewServer(cfg, store)
+	h := srv.Handler()
+	cookie := loginCookie(t, h)
+
+	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+	awaitIdle(t, srv)
+	st := srv.lastJob()
+	require.Contains(t, st.Error, "a.txt")
+	require.Contains(t, st.Error, "oss down")
+	keys := store.putKeys()
+	require.Len(t, keys, 1)
+	require.True(t, strings.HasSuffix(keys[0], "/"+bundleMetaName))
+	for _, k := range keys {
+		require.False(t, strings.HasPrefix(k, "index/"), k)
+	}
+
+	_, err := os.Stat(filepath.Join(cfg.Upload.Workspace, "a.txt"))
+	require.NoError(t, err)
 }
 
 func TestUploadPushRequiresAnalyze(t *testing.T) {
