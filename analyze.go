@@ -28,6 +28,13 @@ const (
 	analyzeImageMaxBytes    = 8 << 20
 	analyzePeekMaxBytes     = 1 << 10
 	analyzeHTTPTimeout      = 120 * time.Second
+	// analyzeRunTimeout caps one whole analyze run; the per-request HTTP
+	// timeout alone cannot stop a long tool loop.
+	analyzeRunTimeout = 30 * time.Minute
+	// analyzeMaxImages caps the base64 image user messages kept in the
+	// message history (each is ~11MB); older ones are replaced by a
+	// placeholder.
+	analyzeMaxImages = 4
 )
 
 // analyzeBudget scales the round and tool-call budgets with the staged file
@@ -238,7 +245,15 @@ func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
 	s.emitProgress(jobProgress{Kind: lockAnalyze, Message: "starting", Total: rounds}, false)
 	go func() {
 		defer s.release(lockAnalyze)
-		title, err := ag.run(context.Background(), files)
+		defer func() {
+			if r := recover(); r != nil {
+				log.Println("analyze panic:", r)
+				s.emitFail(jobProgress{Kind: lockAnalyze, Error: "internal error"})
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), analyzeRunTimeout)
+		defer cancel()
+		title, err := ag.run(ctx, files)
 		if err != nil {
 			log.Println("analyze:", err)
 			s.emitFail(jobProgress{Kind: lockAnalyze, Error: "analyze failed"})
@@ -338,6 +353,7 @@ func (a *analyzeAgent) run(ctx context.Context, files []workspaceFile) (string, 
 			extra = append(extra, userMsgs...)
 		}
 		messages = append(messages, extra...)
+		trimImageMessages(messages)
 		if a.title != "" {
 			return a.title, nil
 		}
@@ -457,9 +473,11 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 		newName, _ := sanitizeWorkspaceName(args.NewName)
 		return reply("renamed to `" + newName + "`")
 	case "set_title":
-		title := strings.TrimSpace(args.Title)
-		if title == "" {
-			return reply("error: empty title")
+		// Apply the same sanitizing as the finalize plain-text fallback so
+		// the stored title always fits the push rules.
+		title, err := sanitizePushTitle(args.Title)
+		if err != nil {
+			return reply("error: title is empty after sanitizing (letters, digits, '_' and '.' only, everything else folds to '-'); call set_title again with a descriptive title")
 		}
 		if err := a.setTitle(title); err != nil {
 			return reply("error: " + err.Error())
@@ -482,6 +500,34 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 		return reply("datetime set")
 	default:
 		return reply("unknown tool: " + tc.Function.Name)
+	}
+}
+
+// trimImageMessages replaces all but the newest analyzeMaxImages
+// image-carrying user messages with a plain-text placeholder: a base64 image
+// is ~11MB and would otherwise accumulate in the history for the whole run.
+func trimImageMessages(messages []chatMessage) {
+	seen := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := &messages[i]
+		parts, ok := m.Content.([]chatPart)
+		if !ok || m.Role != "user" {
+			continue
+		}
+		isImage := false
+		for _, p := range parts {
+			if p.ImageURL != nil {
+				isImage = true
+				break
+			}
+		}
+		if !isImage {
+			continue
+		}
+		seen++
+		if seen > analyzeMaxImages {
+			m.Content = "[image omitted]"
+		}
 	}
 }
 
@@ -513,7 +559,14 @@ func (a *analyzeAgent) chat(ctx context.Context, messages []chatMessage, tools [
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("llm: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		// Keep the upstream error body short: it lands in logs (the SSE
+		// error event is always the constant "analyze failed").
+		const maxErrBody = 256
+		msg := strings.TrimSpace(string(data))
+		if len(msg) > maxErrBody {
+			msg = msg[:maxErrBody] + "..."
+		}
+		return nil, fmt.Errorf("llm: HTTP %d: %s", resp.StatusCode, msg)
 	}
 	var out chatResponse
 	if err := json.Unmarshal(data, &out); err != nil {

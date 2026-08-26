@@ -127,15 +127,22 @@ func (s *Server) handleUploadPush(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "prefix": prefix + "/", "id": id})
 }
 
-// runPush uploads .meta.json then every staged file to the bucket under prefix,
-// removing each staged file from the workspace once it lands. After all files
-// succeed it records the bundle in the monthly index (rewriting the bucket
-// file and updating the in-memory copy). The first failure stops
-// the job and keeps the remaining files staged. job is owned by this goroutine
+// runPush uploads .meta.json then every staged file to the bucket under
+// prefix, then records the bundle in the monthly index (rewriting the bucket
+// file and updating the in-memory copy). Staged files are only removed from
+// the workspace once the index write lands, so a failed push leaves the whole
+// batch staged for a retry instead of orphaning the bundle. The first failure
+// stops the job and keeps everything staged. job is owned by this goroutine
 // alone (the progressReader callback runs inside store.Put on the same
 // goroutine), so it needs no locking.
 func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, meta bundleMeta) {
 	defer s.release(lockPush)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println("push panic:", r)
+			s.emitFail(jobProgress{Kind: lockPush, Error: "internal error"})
+		}
+	}()
 	log.Printf("push started: %s (%d files)", prefix, len(names))
 	for _, name := range names {
 		if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
@@ -145,13 +152,13 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 	s.emitProgress(job, false)
 	raw, err := json.Marshal(meta)
 	if err != nil {
-		job.Error = err.Error()
+		job.Error = fmt.Sprintf("%v (bundle %s)", err, prefix)
 		s.emitFail(job)
 		return
 	}
 	if err := s.store.Put(prefix+"/"+bundleMetaName, bytes.NewReader(raw), int64(len(raw))); err != nil {
 		log.Println("push meta:", err)
-		job.Error = fmt.Sprintf("%s: %v", bundleMetaName, err)
+		job.Error = fmt.Sprintf("%s: %v (bundle %s)", bundleMetaName, err, prefix)
 		s.emitFail(job)
 		return
 	}
@@ -160,13 +167,10 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 		s.emitProgress(job, false)
 		if err := s.pushOne(&job, filepath.Join(dir, name), prefix+"/"+name); err != nil {
 			log.Println("push:", err)
-			job.Error = fmt.Sprintf("%s: %v", name, err)
+			job.Error = fmt.Sprintf("%s: %v (bundle %s)", name, err, prefix)
 			s.emitFail(job)
 			s.emitFiles()
 			return
-		}
-		if err := os.Remove(filepath.Join(dir, name)); err != nil {
-			log.Println("remove staged file:", err)
 		}
 		job.Done++
 		s.emitProgress(job, false)
@@ -174,10 +178,17 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 	}
 	if err := s.index.append(s.store, meta); err != nil {
 		log.Println("push index:", err)
-		job.Error = fmt.Sprintf("index: %v", err)
+		job.Error = fmt.Sprintf("index: %v (bundle %s)", err, prefix)
 		s.emitFail(job)
 		s.emitFiles()
 		return
+	}
+	// The bundle is recorded; drop the staged copies. A failed delete only
+	// leaves a duplicate behind, so it is logged, not fatal.
+	for _, name := range names {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			log.Println("remove staged file:", err)
+		}
 	}
 	s.clearWorkspaceStateIfEmpty()
 	job.File = ""

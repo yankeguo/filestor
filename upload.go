@@ -256,10 +256,19 @@ type workspaceStateStore struct {
 
 func newWorkspaceStateStore(dir string) *workspaceStateStore {
 	w := &workspaceStateStore{dir: dir}
-	if _, err := os.Stat(workspaceStatePath(dir)); err == nil {
-		w.exists = true
-		w.state = loadWorkspaceState(dir)
+	data, err := os.ReadFile(workspaceStatePath(dir))
+	if err != nil {
+		return w
 	}
+	var st workspaceState
+	if err := json.Unmarshal(data, &st); err != nil {
+		// A corrupt state file is treated as absent: an exists=true store
+		// holding a zero state would make pin() a permanent no-op.
+		log.Println("load workspace state:", err)
+		return w
+	}
+	w.exists = true
+	w.state = st
 	return w
 }
 

@@ -204,8 +204,8 @@ function renderJob(job: JobProgress | null): void {
 function renderDone(job: JobProgress | null): void {
   if (!job) return
   if (job.kind === 'analyze') {
-    if (job.title) pushTitle.value = job.title
-    if (job.time) pushTime.value = job.time
+    if (job.title && document.activeElement !== pushTitle) pushTitle.value = job.title
+    if (job.time && document.activeElement !== pushTime) pushTime.value = job.time
     setBar(100, false, 'Analysis complete.', 'text-success')
     return
   }
@@ -330,6 +330,7 @@ function uploadOne(file: File, onprogress: (loaded: number, total: number) => vo
     }
     xhr.onload = () => {
       if (xhr.responseURL && xhr.responseURL.indexOf('/login') !== -1) {
+        reject(new Error('login required'))
         location.href = '/login'
         return
       }
@@ -372,6 +373,7 @@ function uploadFiles(list: FileList | File[] | null, dirRejected?: boolean): voi
   if (!list) return
   if (isBusy()) {
     showError('Another operation is in progress, try again in a moment.')
+    picker.value = ''
     return
   }
   const files: File[] = []
@@ -382,7 +384,7 @@ function uploadFiles(list: FileList | File[] | null, dirRejected?: boolean): voi
     const name = f.name || ''
     if (!name || name.charAt(0) === '.' || f.webkitRelativePath) {
       rejected = true
-    } else if (f.size > stageMax) {
+    } else if (f.size >= stageMax) {
       tooLarge.push(name)
     } else {
       files.push(f)
@@ -390,7 +392,7 @@ function uploadFiles(list: FileList | File[] | null, dirRejected?: boolean): voi
   }
   if (!files.length) {
     if (rejected) showError('Folders and hidden files (names starting with ".") are not allowed.')
-    if (tooLarge.length) showError('Over 2 GiB, skipped: ' + tooLarge.join(', '))
+    if (tooLarge.length) showError('Over the max 2 GiB, skipped: ' + tooLarge.join(', '))
     picker.value = ''
     return
   }
@@ -420,7 +422,7 @@ function uploadFiles(list: FileList | File[] | null, dirRejected?: boolean): voi
     const msgs: string[] = []
     if (failed.length) msgs.push('Failed: ' + failed.join('; '))
     if (rejected) msgs.push('Folders and hidden files were skipped.')
-    if (tooLarge.length) msgs.push('Over 2 GiB, skipped: ' + tooLarge.join(', '))
+    if (tooLarge.length) msgs.push('Over the max 2 GiB, skipped: ' + tooLarge.join(', '))
     if (msgs.length) showError(msgs.join(' '))
   }
   function next(): void {

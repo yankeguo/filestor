@@ -361,3 +361,40 @@ func TestUploadDeleteClearsAnalyzed(t *testing.T) {
 	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "t"}, loadWorkspaceState(dir))
 	require.Equal(t, http.StatusBadRequest, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
 }
+
+func TestUploadPushIndexFailureKeepsFiles(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.txt"), []byte("bb"), 0o644))
+	store := &fakeStore{}
+	store.putHook = func(key string) {
+		if strings.HasPrefix(key, indexRoot+"/") {
+			store.putErr = errors.New("oss down")
+		}
+	}
+	srv := NewServer(cfg, store)
+	h := srv.Handler()
+	cookie := loginCookie(t, h)
+
+	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+	awaitIdle(t, srv)
+	st := srv.lastJob()
+	require.Contains(t, st.Error, "index:")
+	require.Contains(t, st.Error, "oss down")
+	// The failure carries the bundle prefix for log correlation.
+	id, ok := parseBundleID(st.Prefix)
+	require.True(t, ok)
+	require.Contains(t, st.Error, "(bundle "+bundlePrefix(id)+")")
+
+	// New semantics: the index write failed, so the bundle was never recorded
+	// and every staged file stays in the workspace for a retry.
+	for _, k := range store.putKeys() {
+		require.False(t, strings.HasPrefix(k, indexRoot+"/"), k)
+	}
+	require.Empty(t, srv.index.year(2026))
+	for _, name := range []string{"a.txt", "b.txt"} {
+		_, err := os.Stat(filepath.Join(dir, name))
+		require.NoError(t, err, name)
+	}
+}

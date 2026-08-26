@@ -36,6 +36,9 @@ var (
 
 func defaultRunCmd(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	// soffice forks a grandchild that inherits the pipes; without WaitDelay
+	// cmd.Run() would block on the pipe copy well past the ctx timeout.
+	cmd.WaitDelay = 5 * time.Second
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -320,8 +323,14 @@ func hashFileSHA256(path string) (string, error) {
 }
 
 // convertCacheGet returns the cached conversion output for a content hash.
+// Entries older than convertCacheTTL count as a miss (left in place for
+// pruneConvertCache to remove).
 func convertCacheGet(dir, key, ext string) ([]byte, bool) {
-	data, err := os.ReadFile(filepath.Join(workspaceCachePath(dir), key+ext))
+	p := filepath.Join(workspaceCachePath(dir), key+ext)
+	if info, err := os.Stat(p); err != nil || time.Since(info.ModTime()) > convertCacheTTL {
+		return nil, false
+	}
+	data, err := os.ReadFile(p)
 	if err != nil || len(data) == 0 {
 		return nil, false
 	}

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/url"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -37,7 +39,6 @@ type ListPage struct {
 	Prefixes    []string
 	Objects     []ObjectInfo
 	IsTruncated bool
-	NextMarker  string
 }
 
 type ObjectStore interface {
@@ -144,7 +145,11 @@ func (s *s3Store) ListKeys(prefix string) ([]string, error) {
 		if marker != "" {
 			in.StartAfter = aws.String(marker)
 		}
-		out, err := s.client.ListObjectsV2(context.Background(), in)
+		// The interface deliberately takes no ctx; a hung startup load is
+		// bounded by a 30s timeout on each ListObjectsV2 call instead.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		out, err := s.client.ListObjectsV2(ctx, in)
+		cancel()
 		if err != nil {
 			return nil, err
 		}
@@ -174,12 +179,18 @@ func isS3NotFound(err error) bool {
 }
 
 func (s *s3Store) Put(key string, r io.Reader, size int64) error {
-	_, err := s.client.PutObject(context.Background(), &s3.PutObjectInput{
+	in := &s3.PutObjectInput{
 		Bucket:        aws.String(s.bucket),
 		Key:           aws.String(key),
 		Body:          r,
 		ContentLength: aws.Int64(size),
-	})
+	}
+	// An explicit ContentType lets the signed preview URLs render inline;
+	// without a known extension the SDK/server default applies.
+	if ct := mime.TypeByExtension(filepath.Ext(key)); ct != "" {
+		in.ContentType = aws.String(ct)
+	}
+	_, err := s.client.PutObject(context.Background(), in)
 	return err
 }
 

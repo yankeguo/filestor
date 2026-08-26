@@ -68,7 +68,7 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Cache-Control", "no-store")
 		h.Set("Content-Security-Policy", strings.Join([]string{
 			"default-src 'none'",
-			"script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'",
+			"script-src 'self' https://cdn.jsdelivr.net",
 			"style-src https://cdn.jsdelivr.net 'unsafe-inline'",
 			"font-src https://cdn.jsdelivr.net",
 			"img-src 'self' data: https:",

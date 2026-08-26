@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -44,19 +45,18 @@ func (s *Server) handleBundle(w http.ResponseWriter, r *http.Request) {
 		// fall back to the bundle's own .meta.json.
 		var err error
 		if meta, err = loadBundleMeta(s.store, id); err != nil {
-			http.Error(w, "bundle not found", http.StatusNotFound)
+			if errors.Is(err, errNotFound) {
+				http.Error(w, "bundle not found", http.StatusNotFound)
+				return
+			}
+			log.Println("load bundle meta:", err)
+			http.Error(w, "meta lookup failed", http.StatusBadGateway)
 			return
 		}
 	}
 	when, err := time.Parse(pushTimeLayout, meta.Time)
 	if err != nil {
 		http.Error(w, "bundle not found", http.StatusNotFound)
-		return
-	}
-	page, err := s.store.List(bundlePrefix(id)+"/", "")
-	if err != nil {
-		log.Println("list objects:", err)
-		http.Error(w, "list failed", http.StatusBadGateway)
 		return
 	}
 	data := detailData{
@@ -67,40 +67,56 @@ func (s *Server) handleBundle(w http.ResponseWriter, r *http.Request) {
 		TimeHM:    when.Format("15:04"),
 		BackMonth: when.Format(browseMonthLayout),
 	}
+	// Page through the whole bundle prefix: one List call only returns the
+	// first page, so a large bundle would be truncated.
+	prefix := bundlePrefix(id) + "/"
 	var total int64
-	for _, obj := range page.Objects {
-		name := entryName(obj.Key, bundlePrefix(id)+"/")
-		if name == "" || name == bundleMetaName {
-			continue
+	marker := ""
+	for {
+		page, err := s.store.List(prefix, marker)
+		if err != nil {
+			log.Println("list objects:", err)
+			http.Error(w, "list failed", http.StatusBadGateway)
+			return
 		}
-		f := fileEntry{
-			Name:         name,
-			Key:          obj.Key,
-			Size:         formatSize(obj.Size),
-			LastModified: formatTime(obj.LastModified),
-			SizeBytes:    obj.Size,
-			Icon:         fileIcon(name),
-		}
-		total += obj.Size
-		kind := previewKind(name)
-		if kind == "image" && obj.Size > imagePreviewMaxSize {
-			kind = ""
-		}
-		if kind != "" {
-			u, err := s.store.SignPreviewURL(obj.Key, signURLTTL)
-			if err != nil {
-				log.Println("sign preview:", err)
-			} else {
-				f.Kind = kind
-				f.PreviewURL = u
-				if kind == "image" {
-					data.HasImages = true
+		for _, obj := range page.Objects {
+			name := entryName(obj.Key, prefix)
+			if name == "" || name == bundleMetaName {
+				continue
+			}
+			f := fileEntry{
+				Name:         name,
+				Key:          obj.Key,
+				Size:         formatSize(obj.Size),
+				LastModified: formatTime(obj.LastModified),
+				SizeBytes:    obj.Size,
+				Icon:         fileIcon(name),
+			}
+			total += obj.Size
+			kind := previewKind(name)
+			if kind == "image" && obj.Size > imagePreviewMaxSize {
+				kind = ""
+			}
+			if kind != "" {
+				u, err := s.store.SignPreviewURL(obj.Key, signURLTTL)
+				if err != nil {
+					log.Println("sign preview:", err)
 				} else {
-					data.HasMedia = true
+					f.Kind = kind
+					f.PreviewURL = u
+					if kind == "image" {
+						data.HasImages = true
+					} else {
+						data.HasMedia = true
+					}
 				}
 			}
+			data.Files = append(data.Files, f)
 		}
-		data.Files = append(data.Files, f)
+		if !page.IsTruncated || len(page.Objects) == 0 {
+			break
+		}
+		marker = page.Objects[len(page.Objects)-1].Key
 	}
 	data.FileCount = len(data.Files)
 	data.TotalSize = formatSize(total)

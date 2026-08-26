@@ -232,7 +232,6 @@ func (s *Server) handleUploadEvents(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
-	h.Set("Connection", "keep-alive")
 	h.Set("X-Accel-Buffering", "no")
 
 	ch := s.hub.subscribe()

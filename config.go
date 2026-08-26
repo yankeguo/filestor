@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -53,7 +55,10 @@ func loadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	var cfg Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+	// KnownFields rejects misspelled keys instead of silently dropping them.
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
 		return nil, err
 	}
 	if err := cfg.validate(); err != nil {
@@ -74,6 +79,9 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: admin.password is required")
 	}
 	c.S3.Endpoint = normalizeEndpoint(c.S3.Endpoint)
+	if strings.HasPrefix(c.S3.Endpoint, "http://") {
+		log.Println("config: s3.endpoint uses plain http; traffic to the object store is unencrypted")
+	}
 	c.S3.Region = strings.TrimSpace(c.S3.Region)
 	c.S3.Bucket = strings.TrimSpace(c.S3.Bucket)
 	c.S3.AccessKeyID = strings.TrimSpace(c.S3.AccessKeyID)

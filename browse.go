@@ -112,11 +112,13 @@ func buildBrowseCalendar(month time.Time, selected time.Time, yearBundles []bund
 			groupsByKey[dayKey] = g
 			ordered = append(ordered, g)
 		}
-		g.Bundles = append(g.Bundles, calDir{
+		// Bundles arrive oldest-first; prepend so a day group lists its
+		// bundles newest first, matching the newest-days-first group order.
+		g.Bundles = append([]calDir{{
 			Time:  when.Format("15:04"),
 			Title: b.Title,
 			ID:    strings.ToLower(b.ID),
-		})
+		}}, g.Bundles...)
 	}
 	data := browseData{
 		Nav:        "browse",
@@ -235,5 +237,5 @@ func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.UTC().Format("2006-01-02 15:04")
+	return t.Local().Format("2006-01-02 15:04")
 }

@@ -3,28 +3,72 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-// newFakeLLM serves scripted chat-completions responses; fn returns the raw
-// JSON body for each call.
-func newFakeLLM(t *testing.T, fn func(call int, r *http.Request, req chatRequest) string) *httptest.Server {
+var errLLMAssert = errors.New("fake llm assertion failed")
+
+// llmAssert collects assertion failures from the fake-LLM handler goroutine:
+// testify's FailNow is only legal on the test goroutine, so fn receives a
+// *require.Assertions bound to this recorder and newFakeLLM reports the
+// collected failures from a cleanup on the test goroutine.
+type llmAssert struct {
+	mu       sync.Mutex
+	failures []string
+}
+
+func (a *llmAssert) Errorf(format string, args ...any) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.failures = append(a.failures, fmt.Sprintf(format, args...))
+}
+
+// FailNow panics instead of Goexit; the handler recovers the panic, so a
+// failed require stops fn without taking down the handler goroutine.
+func (a *llmAssert) FailNow() { panic(errLLMAssert) }
+
+func (a *llmAssert) check(t *testing.T) {
 	t.Helper()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, f := range a.failures {
+		t.Error(f)
+	}
+}
+
+// newFakeLLM serves scripted chat-completions responses; fn returns the raw
+// JSON body for each call. Assertions inside fn must use rq, not t (fn runs on
+// a handler goroutine, where require's FailNow is not allowed).
+func newFakeLLM(t *testing.T, fn func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string) *httptest.Server {
+	t.Helper()
+	assertions := &llmAssert{}
+	t.Cleanup(func() { assertions.check(t) })
 	call := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if p := recover(); p != nil && p != errLLMAssert {
+				panic(p)
+			}
+		}()
 		call++
 		var req chatRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			assertions.Errorf("call %d: decode request: %v", call, err)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(fn(call, r, req)))
+		_, _ = w.Write([]byte(fn(require.New(assertions), call, r, req)))
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -70,13 +114,13 @@ func TestUploadAnalyzeSuccess(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello world"), 0o644))
 	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59"}))
 
-	llm := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	llm := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		switch call {
 		case 1:
-			require.Equal(t, "test-model", req.Model)
-			require.Equal(t, "high", req.ReasoningEffort)
-			require.Equal(t, "Bearer token", r.Header.Get("Authorization"))
-			require.Len(t, req.Tools, 5)
+			rq.Equal("test-model", req.Model)
+			rq.Equal("high", req.ReasoningEffort)
+			rq.Equal("Bearer token", r.Header.Get("Authorization"))
+			rq.Len(req.Tools, 5)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c1","type":"function","function":{"name":"read_file_as_text","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
 		case 2:
@@ -87,11 +131,11 @@ func TestUploadAnalyzeSuccess(t *testing.T) {
 					found = true
 				}
 			}
-			require.True(t, found)
+			rq.True(found)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"weekly-report\"}"}}]}}]}`
 		default:
-			t.Fatalf("unexpected extra LLM call %d", call)
+			rq.Failf("unexpected extra LLM call", "call %d", call)
 			return ""
 		}
 	})
@@ -114,7 +158,7 @@ func TestUploadAnalyzeRename(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "IMG_2048.txt"), []byte("invoice for march"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "march-invoice.txt"), []byte("other"), 0o644))
 
-	llm := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	llm := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		switch call {
 		case 1:
 			// The target name is taken: the rename must fail without touching
@@ -128,7 +172,7 @@ func TestUploadAnalyzeRename(t *testing.T) {
 					found = true
 				}
 			}
-			require.True(t, found, "rename conflict must surface as a tool error")
+			rq.True(found, "rename conflict must surface as a tool error")
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c2","type":"function","function":{"name":"rename_file","arguments":"{\"name\":\"IMG_2048.txt\",\"new_name\":\"2026-03-invoice.txt\"}"}}]}}]}`
 		case 3:
@@ -139,11 +183,11 @@ func TestUploadAnalyzeRename(t *testing.T) {
 					found = true
 				}
 			}
-			require.True(t, found)
+			rq.True(found)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c3","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"march-invoice\"}"}}]}}]}`
 		default:
-			t.Fatalf("unexpected extra LLM call %d", call)
+			rq.Failf("unexpected extra LLM call", "call %d", call)
 			return ""
 		}
 	})
@@ -173,7 +217,7 @@ func TestUploadAnalyzeImageTool(t *testing.T) {
 	png := append(append([]byte{}, pngSig...), []byte("rest")...)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "pic.png"), png, 0o644))
 
-	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		switch call {
 		case 1:
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
@@ -194,11 +238,11 @@ func TestUploadAnalyzeImageTool(t *testing.T) {
 					}
 				}
 			}
-			require.True(t, found)
+			rq.True(found)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"screenshot\"}"}}]}}]}`
 		default:
-			t.Fatalf("unexpected extra LLM call %d", call)
+			rq.Failf("unexpected extra LLM call", "call %d", call)
 			return ""
 		}
 	})
@@ -220,7 +264,7 @@ func TestUploadAnalyzeMultiImageRepliesStayConsecutive(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.png"), png, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.png"), png, 0o644))
 
-	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		switch call {
 		case 1:
 			// Two image reads in a single assistant turn.
@@ -237,19 +281,19 @@ func TestUploadAnalyzeMultiImageRepliesStayConsecutive(t *testing.T) {
 					idx = i
 				}
 			}
-			require.GreaterOrEqual(t, idx, 0)
-			require.GreaterOrEqual(t, len(req.Messages), idx+5)
+			rq.GreaterOrEqual(idx, 0)
+			rq.GreaterOrEqual(len(req.Messages), idx+5)
 			ms := req.Messages[idx+1 : idx+5]
-			require.Equal(t, "tool", ms[0].Role)
-			require.Equal(t, "c1", ms[0].ToolCallID)
-			require.Equal(t, "tool", ms[1].Role)
-			require.Equal(t, "c2", ms[1].ToolCallID)
-			require.Equal(t, "user", ms[2].Role)
-			require.Equal(t, "user", ms[3].Role)
+			rq.Equal("tool", ms[0].Role)
+			rq.Equal("c1", ms[0].ToolCallID)
+			rq.Equal("tool", ms[1].Role)
+			rq.Equal("c2", ms[1].ToolCallID)
+			rq.Equal("user", ms[2].Role)
+			rq.Equal("user", ms[3].Role)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c3","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"photos\"}"}}]}}]}`
 		default:
-			t.Fatalf("unexpected extra LLM call %d", call)
+			rq.Failf("unexpected extra LLM call", "call %d", call)
 			return ""
 		}
 	})
@@ -266,10 +310,10 @@ func TestUploadAnalyzeTextAnswerFallback(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
-	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		if call == 2 {
 			// The forced-decision round only offers set_title/set_datetime.
-			require.Len(t, req.Tools, 2)
+			rq.Len(req.Tools, 2)
 		}
 		// The model never calls set_title and answers in plain text.
 		return `{"choices":[{"message":{"role":"assistant","content":"weekly-report"}}]}`
@@ -289,7 +333,7 @@ func TestUploadAnalyzeTextAnswerFallback(t *testing.T) {
 func TestUploadAnalyzeNoTitle(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("hi"), 0o644))
-	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		// Neither a tool call nor usable text: genuinely no title.
 		return `{"choices":[{"message":{"role":"assistant","content":""}}]}`
 	})
@@ -309,22 +353,22 @@ func TestUploadAnalyzeRoundBudgetForcesDecision(t *testing.T) {
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
 	calls := 0
-	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		calls = call
 		if call <= analyzeBaseRounds {
 			// The model keeps reading the same file, burning every round.
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c","type":"function","function":{"name":"read_file_as_text","arguments":"{\"name\":\"a.txt\"}"}}]}}]}`
 		}
-		require.Equal(t, analyzeBaseRounds+1, call)
-		require.Len(t, req.Tools, 2, "forced round drops the read tools")
+		rq.Equal(analyzeBaseRounds+1, call)
+		rq.Len(req.Tools, 2, "forced round drops the read tools")
 		nudged := false
 		for _, m := range req.Messages {
 			if s, ok := m.Content.(string); ok && m.Role == "user" && strings.Contains(s, "decide now") {
 				nudged = true
 			}
 		}
-		require.True(t, nudged)
+		rq.True(nudged)
 		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 			`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"forced\"}"}}]}}]}`
 	})
@@ -363,8 +407,8 @@ func TestUploadAnalyzePeeks(t *testing.T) {
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "report.txt"), []byte("Q3 revenue\nsummary\nand outlook"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "bin.dat"), []byte{'x', 0, 'y'}, 0o644))
-	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
-		require.Equal(t, 1, call)
+	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
+		rq.Equal(1, call)
 		list := ""
 		for _, m := range req.Messages {
 			if s, ok := m.Content.(string); ok && m.Role == "user" && strings.Contains(s, "Files staged for upload") {
@@ -372,8 +416,8 @@ func TestUploadAnalyzePeeks(t *testing.T) {
 			}
 		}
 		// Native text gets a one-line peek; the binary file gets none.
-		require.Contains(t, list, "peek: Q3 revenue summary and outlook")
-		require.Equal(t, 1, strings.Count(list, "peek:"))
+		rq.Contains(list, "peek: Q3 revenue summary and outlook")
+		rq.Equal(1, strings.Count(list, "peek:"))
 		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"q3-report\"}"}}]}}]}`
 	})
@@ -426,7 +470,7 @@ func TestUnmarshalToolArgs(t *testing.T) {
 func TestUploadAnalyzeObjectArguments(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("hi"), 0o644))
-	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":{"title":"from-object"}}}]}}]}`
 	})
@@ -461,7 +505,7 @@ func TestUploadAnalyzeSetDatetime(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("invoice 2026-08-20"), 0o644))
 	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "old"}))
 
-	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		switch call {
 		case 1:
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
@@ -470,7 +514,7 @@ func TestUploadAnalyzeSetDatetime(t *testing.T) {
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"invoice\"}"}}]}}]}`
 		default:
-			t.Fatalf("unexpected extra LLM call %d", call)
+			rq.Failf("unexpected extra LLM call", "call %d", call)
 			return ""
 		}
 	})
@@ -492,7 +536,7 @@ func TestUploadAnalyzeInvalidDatetimeKeepsPinnedTime(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
 	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59"}))
 
-	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		switch call {
 		case 1:
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
@@ -504,11 +548,11 @@ func TestUploadAnalyzeInvalidDatetimeKeepsPinnedTime(t *testing.T) {
 					found = true
 				}
 			}
-			require.True(t, found)
+			rq.True(found)
 			return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 				`{"id":"c2","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"ok\"}"}}]}}]}`
 		default:
-			t.Fatalf("unexpected extra LLM call %d", call)
+			rq.Failf("unexpected extra LLM call", "call %d", call)
 			return ""
 		}
 	})
@@ -527,7 +571,7 @@ func TestUploadAnalyzeFailureKeepsUnanalyzed(t *testing.T) {
 	dir := cfg.Upload.Workspace
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644))
 	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59"}))
-	srv := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	srv := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		// Neither a tool call nor usable text: genuinely no title.
 		return `{"choices":[{"message":{"role":"assistant","content":""}}]}`
 	})
@@ -545,7 +589,7 @@ func TestWorkspaceLockDuringAnalyze(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("hi"), 0o644))
 	block := make(chan struct{})
-	llm := newFakeLLM(t, func(call int, r *http.Request, req chatRequest) string {
+	llm := newFakeLLM(t, func(rq *require.Assertions, call int, r *http.Request, req chatRequest) string {
 		<-block
 		return `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[` +
 			`{"id":"c1","type":"function","function":{"name":"set_title","arguments":"{\"title\":\"ok\"}"}}]}}]}`
@@ -616,4 +660,54 @@ func TestReadWorkspaceImage(t *testing.T) {
 
 	_, _, err = readWorkspaceImage(context.Background(), dir, "a.txt")
 	require.Error(t, err)
+}
+
+func TestUploadAnalyzeUpstreamFailureNotEchoed(t *testing.T) {
+	// Upstream failure details stay in the server logs: the job/SSE error is a
+	// plain "analyze failed" and never carries the upstream response body.
+	cases := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"http500", http.StatusInternalServerError, "secret-upstream-detail"},
+		{"badJSON", http.StatusOK, "secret-upstream-detail"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := cfgWithWorkspace(t)
+			require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("hi"), 0o644))
+			llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(llm.Close)
+			cfg.LLM = LLMConfig{URL: llm.URL, Model: "m"}
+			app := NewServer(cfg, &fakeStore{})
+			h := app.Handler()
+			cookie := loginCookie(t, h)
+			events := app.hub.subscribe()
+			defer app.hub.unsubscribe(events)
+
+			require.Equal(t, http.StatusAccepted, postAnalyze(t, h, cookie).Code)
+			awaitIdle(t, app)
+			require.Equal(t, "analyze failed", app.lastJob().Error)
+
+			// No SSE event carries the upstream body either.
+		drain:
+			for {
+				select {
+				case ev, ok := <-events:
+					if !ok {
+						break drain
+					}
+					data, err := json.Marshal(ev.Data)
+					require.NoError(t, err)
+					require.NotContains(t, string(data), "secret-upstream-detail")
+				default:
+					break drain
+				}
+			}
+		})
+	}
 }

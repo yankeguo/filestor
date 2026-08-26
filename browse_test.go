@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,11 @@ type fakeStore struct {
 	lastList [2]string
 	lastKey  string
 	listFn   func(prefix, marker string) (ListPage, error)
+	// Paged listing: when listPageSize > 0, List serves listObjs sorted by
+	// key, filtered to prefix, listPageSize per call, resuming after marker
+	// (mirroring S3's StartAfter).
+	listObjs     []ObjectInfo
+	listPageSize int
 
 	previewSigned  string
 	lastPreviewKey string
@@ -48,6 +54,20 @@ func (f *fakeStore) List(prefix, marker string) (ListPage, error) {
 	f.listMu.Unlock()
 	if f.listFn != nil {
 		return f.listFn(prefix, marker)
+	}
+	if f.listPageSize > 0 {
+		objs := slices.Clone(f.listObjs)
+		slices.SortFunc(objs, func(a, b ObjectInfo) int { return strings.Compare(a.Key, b.Key) })
+		var rest []ObjectInfo
+		for _, o := range objs {
+			if strings.HasPrefix(o.Key, prefix) && o.Key > marker {
+				rest = append(rest, o)
+			}
+		}
+		if len(rest) > f.listPageSize {
+			return ListPage{Objects: rest[:f.listPageSize], IsTruncated: true}, f.err
+		}
+		return ListPage{Objects: rest}, f.err
 	}
 	return f.page, f.err
 }
@@ -94,7 +114,9 @@ func (f *fakeStore) lastListCall() [2]string {
 }
 
 func (f *fakeStore) SignGetURL(key string, ttl time.Duration) (string, error) {
+	f.listMu.Lock()
 	f.lastKey = key
+	f.listMu.Unlock()
 	if f.err != nil {
 		return "", f.err
 	}
@@ -105,7 +127,9 @@ func (f *fakeStore) SignGetURL(key string, ttl time.Duration) (string, error) {
 }
 
 func (f *fakeStore) SignPreviewURL(key string, ttl time.Duration) (string, error) {
+	f.listMu.Lock()
 	f.lastPreviewKey = key
+	f.listMu.Unlock()
 	if f.err != nil {
 		return "", f.err
 	}
@@ -113,6 +137,20 @@ func (f *fakeStore) SignPreviewURL(key string, ttl time.Duration) (string, error
 		return f.previewSigned, nil
 	}
 	return "https://example.oss-cn-hangzhou.aliyuncs.com/preview/" + url.PathEscape(key) + "?sig=1", nil
+}
+
+// lastSignedKey returns the key of the most recent SignGetURL call.
+func (f *fakeStore) lastSignedKey() string {
+	f.listMu.Lock()
+	defer f.listMu.Unlock()
+	return f.lastKey
+}
+
+// lastPreviewSignedKey returns the key of the most recent SignPreviewURL call.
+func (f *fakeStore) lastPreviewSignedKey() string {
+	f.listMu.Lock()
+	defer f.listMu.Unlock()
+	return f.lastPreviewKey
 }
 
 func (f *fakeStore) Put(key string, r io.Reader, size int64) error {
@@ -475,7 +513,7 @@ func TestPreviewRedirectsToInlineSignedURL(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusFound, rec.Code)
 	require.Equal(t, "https://oss.example/inline", rec.Header().Get("Location"))
-	require.Equal(t, "docs/a.jpg", store.lastPreviewKey)
+	require.Equal(t, "docs/a.jpg", store.lastPreviewSignedKey())
 }
 
 func TestPreviewRequiresLogin(t *testing.T) {
@@ -498,7 +536,7 @@ func TestDownloadRedirectsToSignedURL(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusFound, rec.Code)
 	require.Equal(t, "https://oss.example/signed-object", rec.Header().Get("Location"))
-	require.Equal(t, "docs/a.txt", store.lastKey)
+	require.Equal(t, "docs/a.txt", store.lastSignedKey())
 }
 
 func TestDownloadRejectsEmptyKey(t *testing.T) {
@@ -536,13 +574,137 @@ func TestFormatSize(t *testing.T) {
 	require.Equal(t, "1.5 KB", formatSize(1536))
 }
 
-func TestAttachmentDisposition(t *testing.T) {
-	d := attachmentDisposition(`dir/"q".txt`)
-	require.Contains(t, d, `filename="q.txt"`)
-	require.Contains(t, d, "filename*=UTF-8''")
+func TestBundleRequiresLogin(t *testing.T) {
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
+	req := httptest.NewRequest(http.MethodGet, "/bundle/"+testBundleID1, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusFound, rec.Code)
+	require.Equal(t, "/login", rec.Header().Get("Location"))
+}
 
-	d = attachmentDisposition("dir/evil\r\nX.txt")
-	require.NotContains(t, d, "\r")
-	require.NotContains(t, d, "\n")
-	require.Contains(t, d, `filename="evilX.txt"`)
+func TestHandlersWithoutStore(t *testing.T) {
+	// NewServer(cfg, nil) serves the auth-locked routes but every handler that
+	// needs the bucket answers 503.
+	h := NewServer(cfgWithWorkspace(t), nil).Handler()
+	cookie := loginCookie(t, h)
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	require.Equal(t, http.StatusServiceUnavailable, get("/browse").Code)
+	require.Equal(t, http.StatusServiceUnavailable, get("/download?key=x").Code)
+	require.Equal(t, http.StatusServiceUnavailable, get("/preview?key=x").Code)
+	require.Equal(t, http.StatusServiceUnavailable, get("/bundle/"+testBundleID1).Code)
+	require.Equal(t, http.StatusServiceUnavailable, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+}
+
+func TestDownloadSignFailure(t *testing.T) {
+	h := NewServer(testCfg(), &fakeStore{err: errors.New("sign down")}).Handler()
+	cookie := loginCookie(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/download?key=a.txt", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+}
+
+func TestPreviewSignFailure(t *testing.T) {
+	h := NewServer(testCfg(), &fakeStore{err: errors.New("sign down")}).Handler()
+	cookie := loginCookie(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/preview?key=a.jpg", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+}
+
+func TestBundleDetailPaginatesList(t *testing.T) {
+	prefix := bundlePrefix(testBundleID1) + "/"
+	meta := bundleMeta{ID: testBundleID1, Title: "x", Time: "2026-08-24T06:59"}
+	// 250 files plus .meta.json: two pages at a page size of 200.
+	objs := make([]ObjectInfo, 0, 251)
+	objs = append(objs, ObjectInfo{Key: prefix + bundleMetaName, Size: 64})
+	for i := 0; i < 250; i++ {
+		objs = append(objs, ObjectInfo{Key: fmt.Sprintf("%sf-%03d.txt", prefix, i), Size: 10})
+	}
+	store := &fakeStore{
+		listObjs:     objs,
+		listPageSize: 200,
+		objects:      map[string][]byte{bundleMetaKey(testBundleID1): mustMetaJSON(t, meta)},
+	}
+	h := NewServer(testCfg(), store).Handler()
+	cookie := loginCookie(t, h)
+
+	req := httptest.NewRequest(http.MethodGet, "/bundle/"+testBundleID1, nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	// Every file from both pages is listed; .meta.json stays omitted.
+	require.Contains(t, body, "250 files")
+	require.Contains(t, body, "f-000.txt")
+	require.Contains(t, body, "f-249.txt")
+	require.NotContains(t, body, bundleMetaName)
+	// The second page resumed from the last key of the first page
+	// (.meta.json sorts before f-000.txt).
+	require.Equal(t, [2]string{prefix, prefix + "f-198.txt"}, store.lastListCall())
+}
+
+func TestBundleDetailMetaFallbackErrors(t *testing.T) {
+	// The bundle is not in the in-memory index, so the meta comes from the
+	// bucket: errNotFound is a 404, any other lookup failure a 502.
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"not found", errNotFound, http.StatusNotFound},
+		{"upstream error", errors.New("oss down"), http.StatusBadGateway},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeStore{getFn: func(string) ([]byte, error) { return nil, tc.err }}
+			h := NewServer(testCfg(), store).Handler()
+			cookie := loginCookie(t, h)
+			req := httptest.NewRequest(http.MethodGet, "/bundle/"+testBundleID1, nil)
+			req.AddCookie(cookie)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			require.Equal(t, tc.want, rec.Code)
+		})
+	}
+}
+
+func TestBrowseCalendarDayWithoutMonth(t *testing.T) {
+	// A day given alone pulls its own month into view.
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/browse?day=2026-03-10", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "March 2026")
+	// The selected cell is highlighted even though the day has no bundle.
+	require.Contains(t, body, `class="table-primary"`)
+	require.Contains(t, body, "No bundles on 2026-03-10.")
+}
+
+func TestBrowseCalendarGarbageMonthFallsBack(t *testing.T) {
+	// An unparseable month silently falls back to the current one.
+	h := NewServer(testCfg(), &fakeStore{}).Handler()
+	cookie := loginCookie(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/browse?month=garbage", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), time.Now().Format("January 2006"))
 }
