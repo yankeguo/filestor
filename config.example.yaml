@@ -24,3 +24,11 @@ upload:
 #   effort: medium
 #   headers:
 #     Authorization: Bearer REPLACE_ME
+#   # Optional embeddings endpoint; each field falls back to the llm-level
+#   # counterpart when unset. dimensions is embeddings-only and optional.
+#   embeddings:
+#     url: https://api.example.com/v1/embeddings
+#     model: my-embedding-model
+#     dimensions: 1024
+#     headers:
+#       Authorization: Bearer REPLACE_ME

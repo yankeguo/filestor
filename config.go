@@ -43,10 +43,21 @@ type UploadConfig struct {
 // LLMConfig describes an optional OpenAI-compatible endpoint used by
 // POST /upload/analyze. url and model must be set together.
 type LLMConfig struct {
-	URL     string            `yaml:"url"`
-	Model   string            `yaml:"model"`
-	Effort  string            `yaml:"effort"`
-	Headers map[string]string `yaml:"headers"`
+	URL        string            `yaml:"url"`
+	Model      string            `yaml:"model"`
+	Effort     string            `yaml:"effort"`
+	Headers    map[string]string `yaml:"headers"`
+	Embeddings EmbeddingsConfig  `yaml:"embeddings"`
+}
+
+// EmbeddingsConfig describes an optional OpenAI-compatible embeddings
+// endpoint. Each field falls back to its llm-level counterpart when unset;
+// dimensions is embeddings-only and optional.
+type EmbeddingsConfig struct {
+	URL        string            `yaml:"url"`
+	Model      string            `yaml:"model"`
+	Headers    map[string]string `yaml:"headers"`
+	Dimensions int               `yaml:"dimensions"`
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -111,18 +122,43 @@ func (c *Config) validate() error {
 	if (c.LLM.URL == "") != (c.LLM.Model == "") {
 		return fmt.Errorf("config: llm.url and llm.model must be set together")
 	}
-	for k, v := range c.LLM.Headers {
+	c.LLM.Headers = normalizeHeaders(c.LLM.Headers)
+	c.LLM.Embeddings.URL = strings.TrimSpace(c.LLM.Embeddings.URL)
+	c.LLM.Embeddings.Model = strings.TrimSpace(c.LLM.Embeddings.Model)
+	c.LLM.Embeddings.Headers = normalizeHeaders(c.LLM.Embeddings.Headers)
+	if c.LLM.Embeddings.URL == "" {
+		c.LLM.Embeddings.URL = c.LLM.URL
+	}
+	if c.LLM.Embeddings.Model == "" {
+		c.LLM.Embeddings.Model = c.LLM.Model
+	}
+	if c.LLM.Embeddings.Headers == nil {
+		c.LLM.Embeddings.Headers = c.LLM.Headers
+	}
+	if (c.LLM.Embeddings.URL == "") != (c.LLM.Embeddings.Model == "") {
+		return fmt.Errorf("config: llm.embeddings.url and llm.embeddings.model must be set together")
+	}
+	if c.LLM.Embeddings.Dimensions < 0 {
+		return fmt.Errorf("config: llm.embeddings.dimensions must not be negative")
+	}
+	return nil
+}
+
+// normalizeHeaders trims header names and values, dropping entries with an
+// empty name.
+func normalizeHeaders(h map[string]string) map[string]string {
+	for k, v := range h {
 		nk, nv := strings.TrimSpace(k), strings.TrimSpace(v)
 		if nk == "" {
-			delete(c.LLM.Headers, k)
+			delete(h, k)
 			continue
 		}
 		if nk != k || nv != v {
-			delete(c.LLM.Headers, k)
-			c.LLM.Headers[nk] = nv
+			delete(h, k)
+			h[nk] = nv
 		}
 	}
-	return nil
+	return h
 }
 
 func normalizeEndpoint(ep string) string {

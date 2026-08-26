@@ -59,6 +59,57 @@ func TestLoadConfigLLM(t *testing.T) {
 	require.Equal(t, map[string]string{"Authorization": "Bearer token", "X-Team": "blue"}, cfg.LLM.Headers)
 }
 
+func TestLoadConfigLLMEmbeddings(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
+  url: https://api.example.com/v1/chat/completions
+  model: my-model
+  headers:
+    Authorization: Bearer token
+`), 0o644))
+	cfg, err := loadConfig(path)
+	require.NoError(t, err)
+	// Every embeddings field falls back to its llm-level counterpart.
+	require.Equal(t, "https://api.example.com/v1/chat/completions", cfg.LLM.Embeddings.URL)
+	require.Equal(t, "my-model", cfg.LLM.Embeddings.Model)
+	require.Equal(t, map[string]string{"Authorization": "Bearer token"}, cfg.LLM.Embeddings.Headers)
+	require.Zero(t, cfg.LLM.Embeddings.Dimensions)
+
+	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
+  url: https://api.example.com/v1/chat/completions
+  model: my-model
+  headers:
+    Authorization: Bearer token
+  embeddings:
+    url: ' https://emb.example.com/v1/embeddings '
+    model: ' emb-model '
+    dimensions: 1024
+    headers:
+      Authorization: ' Bearer emb-token '
+`), 0o644))
+	cfg, err = loadConfig(path)
+	require.NoError(t, err)
+	require.Equal(t, "https://emb.example.com/v1/embeddings", cfg.LLM.Embeddings.URL)
+	require.Equal(t, "emb-model", cfg.LLM.Embeddings.Model)
+	require.Equal(t, 1024, cfg.LLM.Embeddings.Dimensions)
+	require.Equal(t, map[string]string{"Authorization": "Bearer emb-token"}, cfg.LLM.Embeddings.Headers)
+}
+
+func TestLoadConfigLLMEmbeddingsRequiresPair(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	for _, extra := range []string{
+		"llm:\n  embeddings:\n    model: emb-model\n",
+		"llm:\n  embeddings:\n    url: https://emb.example.com/v1/embeddings\n",
+	} {
+		require.NoError(t, os.WriteFile(path, []byte(baseYAML()+extra), 0o644))
+		_, err := loadConfig(path)
+		require.Error(t, err, extra)
+		require.Contains(t, err.Error(), "llm.embeddings.url and llm.embeddings.model")
+	}
+}
+
 func TestLoadConfigLLMRequiresPair(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
