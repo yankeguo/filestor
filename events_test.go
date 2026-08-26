@@ -170,3 +170,43 @@ func TestUploadEventsBroadcastsFiles(t *testing.T) {
 	require.True(t, gotLock, "missing stage lock event")
 	require.True(t, gotFiles, "missing files event")
 }
+
+func TestUploadEventsBroadcastsFilesAfterPush(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Upload.Workspace, "a.txt"), []byte("aaa"), 0o644))
+	srv := NewServer(cfg, &fakeStore{})
+	h := srv.Handler()
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+	cookie := loginCookie(t, h)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/upload/events", nil)
+	require.NoError(t, err)
+	req.AddCookie(cookie)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	r := bufio.NewReader(resp.Body)
+	name, _ := readSSEEvent(t, r)
+	require.Equal(t, eventSnapshot, name)
+
+	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+
+	// Mid-push files events still list the staged copies; the page only
+	// clears after the post-remove files event.
+	for {
+		name, data := readSSEEvent(t, r)
+		if name != eventFiles {
+			continue
+		}
+		var payload struct {
+			Files []workspaceFile `json:"files"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(data), &payload))
+		if len(payload.Files) == 0 {
+			return
+		}
+	}
+}

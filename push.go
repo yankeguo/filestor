@@ -192,6 +192,7 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 	}
 	s.clearWorkspaceStateIfEmpty()
 	job.File = ""
+	s.emitFiles()
 	s.emitDone(job)
 	s.emitState()
 	log.Printf("push finished: %s", prefix)
