@@ -271,7 +271,8 @@ func deleteUploadFile(t *testing.T, h http.Handler, cookie *http.Cookie, name st
 func TestUploadStateLifecycle(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	dir := cfg.Upload.Workspace
-	h := NewServer(cfg, &fakeStore{}).Handler()
+	srv := NewServer(cfg, &fakeStore{})
+	h := srv.Handler()
 	cookie := loginCookie(t, h)
 
 	// No staged files: nothing pinned, PUT does not persist.
@@ -295,7 +296,7 @@ func TestUploadStateLifecycle(t *testing.T) {
 	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "weekly report"}, loadWorkspaceState(dir))
 
 	// Editing time/title preserves the analyzed flag.
-	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "weekly report", Analyzed: true}))
+	require.NoError(t, srv.state.save(workspaceState{Time: "2026-08-24T06:59", Title: "weekly report", Analyzed: true}))
 	require.Equal(t, http.StatusOK, putUploadState(t, h, cookie, "2026-08-24T06:59", "weekly report").Code)
 	require.Equal(t, workspaceState{Time: "2026-08-24T06:59", Title: "weekly report", Analyzed: true}, loadWorkspaceState(dir))
 

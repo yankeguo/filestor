@@ -196,13 +196,13 @@ func (s *Server) emitFiles() {
 }
 
 func (s *Server) emitState() {
-	s.hub.broadcast(eventState, loadWorkspaceState(s.workspaceDir()))
+	s.hub.broadcast(eventState, s.state.get())
 }
 
 func (s *Server) snapshot() eventsSnapshot {
 	snap := eventsSnapshot{
 		Files: s.workspaceFiles(),
-		State: loadWorkspaceState(s.workspaceDir()),
+		State: s.state.get(),
 	}
 	s.hub.mu.Lock()
 	defer s.hub.mu.Unlock()

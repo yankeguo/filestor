@@ -182,6 +182,7 @@ var analyzeDecisionTools = analyzeTools[3:]
 type analyzeAgent struct {
 	cfg          LLMConfig
 	dir          string
+	state        *workspaceStateStore
 	http         *http.Client
 	maxRounds    int
 	maxToolCalls int
@@ -219,6 +220,7 @@ func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
 	ag := &analyzeAgent{
 		cfg:          s.Config.LLM,
 		dir:          dir,
+		state:        s.state,
 		http:         &http.Client{Timeout: analyzeHTTPTimeout},
 		maxRounds:    rounds,
 		maxToolCalls: toolCalls,
@@ -244,9 +246,9 @@ func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
 		}
 		// A successful run marks the staged batch as analyzed; adding or
 		// deleting staged files clears the flag again (see upload.go).
-		st := loadWorkspaceState(dir)
+		st := s.state.get()
 		st.Analyzed = true
-		if err := saveWorkspaceState(dir, st); err != nil {
+		if err := s.state.save(st); err != nil {
 			log.Println("save workspace state:", err)
 		}
 		s.emitState()
@@ -263,9 +265,9 @@ func (a *analyzeAgent) progress(p jobProgress) {
 
 // setTitle persists the chosen title, keeping the pinned time.
 func (a *analyzeAgent) setTitle(title string) error {
-	st := loadWorkspaceState(a.dir)
+	st := a.state.get()
 	st.Title = title
-	if err := saveWorkspaceState(a.dir, st); err != nil {
+	if err := a.state.save(st); err != nil {
 		return err
 	}
 	a.title = title
@@ -468,9 +470,9 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 		if err != nil {
 			return reply("error: invalid time")
 		}
-		st := loadWorkspaceState(a.dir)
+		st := a.state.get()
 		st.Time = when
-		if err := saveWorkspaceState(a.dir, st); err != nil {
+		if err := a.state.save(st); err != nil {
 			return reply("error: " + err.Error())
 		}
 		a.when = when

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -241,42 +242,94 @@ func saveWorkspaceState(dir string, st workspaceState) error {
 	return os.Rename(tmpName, workspaceStatePath(dir))
 }
 
-func clearWorkspaceState(dir string) {
-	_ = os.Remove(workspaceStatePath(dir))
+// workspaceStateStore keeps the draft push options in memory: the state file
+// is loaded once at startup (like the monthly bundle index), reads hit memory,
+// and every mutation writes through to state.json. The workspace lock
+// serializes mutations, but PUT /upload/state and SSE snapshots only read, so
+// the store carries its own mutex.
+type workspaceStateStore struct {
+	mu     sync.Mutex
+	dir    string
+	state  workspaceState
+	exists bool // a state file was loaded at startup or saved since
 }
 
-// pinWorkspaceState writes the first-file draft (time=now, title="") only when
-// no state file exists yet.
-func pinWorkspaceState(dir string) {
-	if _, err := os.Stat(workspaceStatePath(dir)); !errors.Is(err, os.ErrNotExist) {
+func newWorkspaceStateStore(dir string) *workspaceStateStore {
+	w := &workspaceStateStore{dir: dir}
+	if _, err := os.Stat(workspaceStatePath(dir)); err == nil {
+		w.exists = true
+		w.state = loadWorkspaceState(dir)
+	}
+	return w
+}
+
+func (w *workspaceStateStore) get() workspaceState {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.state
+}
+
+// save writes the file first and updates memory only once the write lands.
+func (w *workspaceStateStore) save(st workspaceState) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := saveWorkspaceState(w.dir, st); err != nil {
+		return err
+	}
+	w.state = st
+	w.exists = true
+	return nil
+}
+
+// clear removes the state file (staging emptied) and zeroes memory.
+func (w *workspaceStateStore) clear() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_ = os.Remove(workspaceStatePath(w.dir))
+	w.state = workspaceState{}
+	w.exists = false
+}
+
+// pin writes the first-file draft (time=now, title="") only when no state
+// exists yet.
+func (w *workspaceStateStore) pin() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.exists {
 		return
 	}
-	if err := saveWorkspaceState(dir, workspaceState{Time: time.Now().Format(pushTimeLayout)}); err != nil {
+	st := workspaceState{Time: time.Now().Format(pushTimeLayout)}
+	if err := saveWorkspaceState(w.dir, st); err != nil {
 		log.Println("save workspace state:", err)
+		return
 	}
+	w.state = st
+	w.exists = true
 }
 
-// markWorkspaceUnanalyzed clears the analyzed flag after the staged file set
-// changes (file added or deleted), so a push requires a fresh analyze run.
-// It is a no-op when no state file exists yet.
-func markWorkspaceUnanalyzed(dir string) {
-	if _, err := os.Stat(workspaceStatePath(dir)); errors.Is(err, os.ErrNotExist) {
+// markUnanalyzed clears the analyzed flag after the staged file set changes
+// (file added or deleted), so a push requires a fresh analyze run. It is a
+// no-op when no state exists yet.
+func (w *workspaceStateStore) markUnanalyzed() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.exists || !w.state.Analyzed {
 		return
 	}
-	st := loadWorkspaceState(dir)
-	if !st.Analyzed {
-		return
-	}
+	st := w.state
 	st.Analyzed = false
-	if err := saveWorkspaceState(dir, st); err != nil {
+	if err := saveWorkspaceState(w.dir, st); err != nil {
 		log.Println("save workspace state:", err)
+		return
 	}
+	w.state = st
 }
 
-func clearWorkspaceStateIfEmpty(dir string) {
-	files, err := listWorkspaceFiles(dir)
+// clearWorkspaceStateIfEmpty drops the draft state once staging is empty.
+func (s *Server) clearWorkspaceStateIfEmpty() {
+	files, err := listWorkspaceFiles(s.workspaceDir())
 	if err == nil && len(files) == 0 {
-		clearWorkspaceState(dir)
+		s.state.clear()
 	}
 }
 
@@ -288,7 +341,7 @@ func (s *Server) handleUploadPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "list failed", http.StatusInternalServerError)
 		return
 	}
-	st := loadWorkspaceState(dir)
+	st := s.state.get()
 	s.render(w, "upload.html", uploadPageData{
 		Nav:        "upload",
 		Workspace:  dir,
@@ -359,10 +412,10 @@ func (s *Server) handleUploadAdd(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Pin as soon as the first file lands, even if a later part fails.
-		pinWorkspaceState(dir)
+		s.state.pin()
 	}
 	// New staged files invalidate the previous analyze run.
-	markWorkspaceUnanalyzed(dir)
+	s.state.markUnanalyzed()
 	s.emitFiles()
 	s.emitState()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -390,8 +443,8 @@ func (s *Server) handleUploadDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A changed staging set invalidates the previous analyze run.
-	markWorkspaceUnanalyzed(dir)
-	clearWorkspaceStateIfEmpty(dir)
+	s.state.markUnanalyzed()
+	s.clearWorkspaceStateIfEmpty()
 	s.emitFiles()
 	s.emitState()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -408,7 +461,7 @@ func (s *Server) handleUploadState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir := s.workspaceDir()
-	st := loadWorkspaceState(dir)
+	st := s.state.get()
 	if v := strings.TrimSpace(r.Form.Get("time")); v != "" {
 		if _, err := time.Parse(pushTimeLayout, v); err != nil {
 			http.Error(w, "invalid time", http.StatusBadRequest)
@@ -425,7 +478,7 @@ func (s *Server) handleUploadState(w http.ResponseWriter, r *http.Request) {
 	}
 	// Nothing staged: keep the no-op a success, but do not pin options yet.
 	if len(files) > 0 {
-		if err := saveWorkspaceState(dir, st); err != nil {
+		if err := s.state.save(st); err != nil {
 			log.Println("save workspace state:", err)
 			http.Error(w, "save failed", http.StatusInternalServerError)
 			return

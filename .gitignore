@@ -42,3 +42,5 @@ go.work.sum
 /static/node_modules
 /static/dist/*
 !/static/dist/.gitkeep
+
+/.codegraph

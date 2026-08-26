@@ -16,10 +16,12 @@ type Server struct {
 	index      *bundleIndex
 	sessionKey []byte
 	hub        *eventHub
+	state      *workspaceStateStore
 }
 
 func NewServer(cfg *Config, store ObjectStore) *Server {
 	s := &Server{Config: cfg, store: store, index: newBundleIndex(), hub: newEventHub()}
+	s.state = newWorkspaceStateStore(s.workspaceDir())
 	if store != nil {
 		if err := s.index.load(store); err != nil {
 			log.Println("load bundle index:", err)

@@ -321,7 +321,7 @@ func TestUploadPushRequiresAnalyze(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
 
 	// A successful analyze run (flagged in the state) unlocks the push.
-	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "t", Analyzed: true}))
+	require.NoError(t, srv.state.save(workspaceState{Time: "2026-08-24T06:59", Title: "t", Analyzed: true}))
 	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
 	awaitIdle(t, srv)
 	require.Empty(t, srv.lastJob().Error)

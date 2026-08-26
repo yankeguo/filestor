@@ -112,7 +112,7 @@ func (s *Server) handleUploadPush(w http.ResponseWriter, r *http.Request) {
 	}
 	// With the LLM configured, staged files must go through one successful
 	// analyze run before they can be pushed.
-	if s.Config != nil && s.Config.LLM.URL != "" && !loadWorkspaceState(dir).Analyzed {
+	if s.Config != nil && s.Config.LLM.URL != "" && !s.state.get().Analyzed {
 		s.release(lockPush)
 		http.Error(w, "run analyze first", http.StatusBadRequest)
 		return
@@ -179,7 +179,7 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 		s.emitFiles()
 		return
 	}
-	clearWorkspaceStateIfEmpty(dir)
+	s.clearWorkspaceStateIfEmpty()
 	job.File = ""
 	s.emitDone(job)
 	s.emitState()
