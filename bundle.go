@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	contentRoot    = "content"
-	indexRoot      = "index"
-	bundleMetaName = ".meta.json"
+	contentRoot     = "content"
+	indexRoot       = "index"
+	bundleMetaName  = ".meta.json"
+	bundleDigestDir = ".digest"
 )
 
 // bundleMeta is stored as content/.../<uuid>/.meta.json and listed in the

@@ -398,3 +398,78 @@ func TestUploadPushIndexFailureKeepsFiles(t *testing.T) {
 		require.NoError(t, err, name)
 	}
 }
+
+func TestUploadPushWithDigest(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o644))
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "t", Analyzed: true}))
+	require.NoError(t, os.MkdirAll(workspaceDigestPath(dir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceDigestPath(dir), "text-01.txt"), []byte("chunk"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceDigestPath(dir), "image-01-pic.png"), []byte("png"), 0o644))
+	store := &fakeStore{}
+	srv := NewServer(cfg, store)
+	h := srv.Handler()
+	cookie := loginCookie(t, h)
+
+	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+	awaitIdle(t, srv)
+	st := srv.lastJob()
+	require.Empty(t, st.Error)
+	id, ok := parseBundleID(st.Prefix)
+	require.True(t, ok)
+
+	// The digest marks landed under the bundle's .digest directory (read in
+	// alphabetical order), and their bytes counted towards the total.
+	require.Equal(t, []string{
+		bundlePrefix(id) + "/" + bundleMetaName,
+		bundlePrefix(id) + "/a.txt",
+		bundlePrefix(id) + "/.digest/image-01-pic.png",
+		bundlePrefix(id) + "/.digest/text-01.txt",
+		"index/2026/2026-08.json",
+	}, store.putKeys())
+	require.Equal(t, int64(3+3+5), st.TotalBytes)
+
+	raw, err := store.Get(bundlePrefix(id) + "/.digest/text-01.txt")
+	require.NoError(t, err)
+	require.Equal(t, "chunk", string(raw))
+
+	// The push emptied the staging area, so the state and the digest
+	// directory are gone.
+	require.Equal(t, workspaceState{}, loadWorkspaceState(dir))
+	_, err = os.Stat(workspaceDigestPath(dir))
+	require.True(t, os.IsNotExist(err))
+}
+
+func TestUploadPushDigestFailureSkipsIndex(t *testing.T) {
+	cfg := cfgWithWorkspace(t)
+	dir := cfg.Upload.Workspace
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("aaa"), 0o644))
+	require.NoError(t, saveWorkspaceState(dir, workspaceState{Time: "2026-08-24T06:59", Title: "t", Analyzed: true}))
+	require.NoError(t, os.MkdirAll(workspaceDigestPath(dir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceDigestPath(dir), "text-01.txt"), []byte("chunk"), 0o644))
+	store := &fakeStore{}
+	store.putHook = func(key string) {
+		if strings.Contains(key, "/.digest/") {
+			store.putErr = errors.New("oss down")
+		}
+	}
+	srv := NewServer(cfg, store)
+	h := srv.Handler()
+	cookie := loginCookie(t, h)
+
+	require.Equal(t, http.StatusAccepted, postPush(t, h, cookie, "2026-08-24T06:59", "t").Code)
+	awaitIdle(t, srv)
+	st := srv.lastJob()
+	require.Contains(t, st.Error, ".digest/text-01.txt")
+	require.Contains(t, st.Error, "oss down")
+	// The index was never written and everything stays staged for a retry.
+	for _, k := range store.putKeys() {
+		require.False(t, strings.HasPrefix(k, indexRoot+"/"), k)
+	}
+	require.Empty(t, srv.index.year(2026))
+	_, err := os.Stat(filepath.Join(dir, "a.txt"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(workspaceDigestPath(dir), "text-01.txt"))
+	require.NoError(t, err)
+}

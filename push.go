@@ -149,6 +149,15 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 			job.TotalBytes += info.Size()
 		}
 	}
+	// Digest marks (when an analyze run made any) count towards the byte
+	// total too; they are uploaded into the bundle's .digest directory below.
+	if entries, err := os.ReadDir(workspaceDigestPath(dir)); err == nil {
+		for _, e := range entries {
+			if info, err := e.Info(); err == nil && info.Mode().IsRegular() {
+				job.TotalBytes += info.Size()
+			}
+		}
+	}
 	s.emitProgress(job, false)
 	raw, err := json.Marshal(meta)
 	if err != nil {
@@ -175,6 +184,28 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 		job.Done++
 		s.emitProgress(job, false)
 		s.emitFiles()
+	}
+	// The analyze run's digest marks ride along into the bundle's .digest
+	// directory; a missing directory just means there was nothing to mark.
+	// Like any file failure, a failed digest upload stops the job before the
+	// index write so a retry can start over.
+	if entries, err := os.ReadDir(workspaceDigestPath(dir)); err == nil {
+		for _, e := range entries {
+			if !e.Type().IsRegular() {
+				continue
+			}
+			name := e.Name()
+			job.File = bundleDigestDir + "/" + name
+			s.emitProgress(job, false)
+			if err := s.pushOne(&job, filepath.Join(workspaceDigestPath(dir), name), prefix+"/"+bundleDigestDir+"/"+name); err != nil {
+				log.Println("push digest:", err)
+				job.Error = fmt.Sprintf("%s: %v (bundle %s)", job.File, err, prefix)
+				s.emitFail(job)
+				s.emitFiles()
+				return
+			}
+		}
+		job.File = ""
 	}
 	if err := s.index.append(s.store, meta); err != nil {
 		log.Println("push index:", err)
