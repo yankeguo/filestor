@@ -77,18 +77,19 @@ type BailianMultimodalEmbeddingConfig struct {
 }
 
 // VectorsConfig holds vector-store providers. aliyun_oss_vectors is the
-// Aliyun OSS Vectors index the digest embeddings are written into; url
-// (bucket is in the host), access_key_id, access_key_secret, account_id,
-// and index are all required.
+// Aliyun OSS Vectors index the digest embeddings are written into; url is
+// the console 地域节点 (<region>.oss-vectors.aliyuncs.com), and bucket,
+// account_id, access_key_id, access_key_secret, and index are all required.
 type VectorsConfig struct {
 	AliyunOSSVectors AliyunOSSVectorsConfig `yaml:"aliyun_oss_vectors"`
 }
 
 type AliyunOSSVectorsConfig struct {
 	URL             string `yaml:"url"`
+	Bucket          string `yaml:"bucket"`
+	AccountID       string `yaml:"account_id"`
 	AccessKeyID     string `yaml:"access_key_id"`
 	AccessKeySecret string `yaml:"access_key_secret"`
-	AccountID       string `yaml:"account_id"`
 	Index           string `yaml:"index"`
 }
 
@@ -180,12 +181,19 @@ func (c *Config) validate() error {
 	}
 	vec := &c.LLM.Vectors.AliyunOSSVectors
 	vec.URL = strings.TrimSpace(vec.URL)
+	vec.Bucket = strings.TrimSpace(vec.Bucket)
+	vec.AccountID = strings.TrimSpace(vec.AccountID)
 	vec.AccessKeyID = strings.TrimSpace(vec.AccessKeyID)
 	vec.AccessKeySecret = strings.TrimSpace(vec.AccessKeySecret)
-	vec.AccountID = strings.TrimSpace(vec.AccountID)
 	vec.Index = strings.TrimSpace(vec.Index)
 	if vec.URL == "" {
 		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.url is required")
+	}
+	if vec.Bucket == "" {
+		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.bucket is required")
+	}
+	if vec.AccountID == "" {
+		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.account_id is required")
 	}
 	if vec.AccessKeyID == "" {
 		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.access_key_id is required")
@@ -193,16 +201,13 @@ func (c *Config) validate() error {
 	if vec.AccessKeySecret == "" {
 		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.access_key_secret is required")
 	}
-	if vec.AccountID == "" {
-		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.account_id is required")
-	}
 	if vec.Index == "" {
 		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.index is required")
 	}
 	if err := requireHTTPURL("llm.vectors.aliyun_oss_vectors.url", vec.URL); err != nil {
 		return err
 	}
-	if _, _, err := parseVectorsEndpoint(vec.URL); err != nil {
+	if _, err := parseVectorsEndpoint(vec.URL); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	return nil
