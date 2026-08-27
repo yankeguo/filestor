@@ -165,10 +165,12 @@ func TestSecurityHeaders(t *testing.T) {
 	require.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
 	require.Equal(t, "DENY", rec.Header().Get("X-Frame-Options"))
 	require.Equal(t, "no-store", rec.Header().Get("Cache-Control"))
-	require.Contains(t, rec.Header().Get("Content-Security-Policy"), "cdn.jsdelivr.net")
-	require.Contains(t, rec.Header().Get("Content-Security-Policy"), "connect-src 'self'")
-	require.Contains(t, rec.Header().Get("Content-Security-Policy"), "font-src https://cdn.jsdelivr.net")
-	require.Contains(t, rec.Header().Get("Content-Security-Policy"), "media-src 'self'")
+	csp := rec.Header().Get("Content-Security-Policy")
+	require.Contains(t, csp, "script-src 'self'")
+	require.Contains(t, csp, "connect-src 'self'")
+	require.Contains(t, csp, "style-src 'self' 'unsafe-inline'")
+	require.Contains(t, csp, "media-src 'self'")
+	require.NotContains(t, csp, "cdn.jsdelivr.net")
 }
 
 func TestHealthzDoesNotRequireLogin(t *testing.T) {

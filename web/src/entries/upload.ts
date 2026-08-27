@@ -119,12 +119,12 @@ pushTitle.addEventListener('input', () => {
 
 function showError(msg: string): void {
   if (!msg) {
-    statusEl.classList.add('d-none')
+    statusEl.classList.add('hidden')
     statusEl.textContent = ''
     return
   }
   statusEl.textContent = msg
-  statusEl.classList.remove('d-none')
+  statusEl.classList.remove('hidden')
 }
 
 function goLoginIfNeeded(res: Response): boolean {
@@ -140,15 +140,16 @@ function applyLock(): void {
   const jobBusy = lock === 'analyze' || lock === 'push'
   const analyzeRequired = analyzeBtn !== null
   picker.disabled = busy
-  pickerLabel.classList.toggle('disabled', busy)
+  pickerLabel.classList.toggle('pointer-events-none', busy)
+  pickerLabel.classList.toggle('opacity-60', busy)
   if (analyzeBtn) analyzeBtn.disabled = busy
   // With the LLM configured, push stays disabled until the staged files went
   // through one successful analyze run (adding/deleting files resets it).
   pushBtn.disabled = busy || (analyzeRequired && !analyzed)
-  analyzeHint.classList.toggle('d-none', !analyzeRequired || analyzed)
+  analyzeHint.classList.toggle('hidden', !analyzeRequired || analyzed)
   pushTime.disabled = jobBusy
   pushTitle.disabled = jobBusy
-  drop.classList.toggle('pe-none', busy)
+  drop.classList.toggle('pointer-events-none', busy)
   filesEl.querySelectorAll<HTMLButtonElement>('button[data-name]').forEach((btn) => {
     btn.disabled = busy
   })
@@ -163,16 +164,16 @@ function applyState(st: WorkspaceState | null): void {
 }
 
 function showJob(): void {
-  jobBox.classList.remove('d-none')
+  jobBox.classList.remove('hidden')
 }
 
 function setBar(pct: number, animated: boolean, status: string, cls?: string): void {
   showJob()
-  if (animated) jobBar.classList.add('progress-bar-animated')
-  else jobBar.classList.remove('progress-bar-animated')
+  if (animated) jobBar.classList.add('animate-pulse')
+  else jobBar.classList.remove('animate-pulse')
   jobBar.style.width = pct + '%'
   jobBar.textContent = pct + '%'
-  jobStatus.className = 'small mt-1 mb-0 ' + (cls || 'text-secondary')
+  jobStatus.className = 'mt-1 text-sm ' + (cls || 'text-neutral-400')
   jobStatus.textContent = status
 }
 
@@ -186,7 +187,7 @@ function renderJob(job: JobProgress | null): void {
   }
   if (job.error) {
     const fail = job.kind === 'analyze' ? 'Analyze failed' : 'Upload failed: ' + job.error
-    setBar(parseInt(jobBar.style.width, 10) || 0, false, fail, 'text-danger')
+    setBar(parseInt(jobBar.style.width, 10) || 0, false, fail, 'text-red-400')
     return
   }
   if (job.kind === 'analyze') {
@@ -211,11 +212,11 @@ function renderDone(job: JobProgress | null): void {
   if (job.kind === 'analyze') {
     if (job.title && document.activeElement !== pushTitle) pushTitle.value = job.title
     if (job.time && document.activeElement !== pushTime) pushTime.value = job.time
-    setBar(100, false, 'Analysis complete.', 'text-success')
+    setBar(100, false, 'Analysis complete.', 'text-green-400')
     return
   }
   if (job.kind === 'push') {
-    setBar(100, false, 'Uploaded to ' + (job.prefix || 'bucket'), 'text-success')
+    setBar(100, false, 'Uploaded to ' + (job.prefix || 'bucket'), 'text-green-400')
   }
 }
 
@@ -225,7 +226,7 @@ function render(files: WorkspaceFile[]): void {
     const empty = document.createElement('tr')
     const td = document.createElement('td')
     td.colSpan = 4
-    td.className = 'text-secondary'
+    td.className = 'text-neutral-400'
     td.textContent = 'No files'
     empty.appendChild(td)
     filesEl.appendChild(empty)
@@ -235,23 +236,23 @@ function render(files: WorkspaceFile[]): void {
   files.forEach((f) => {
     const tr = document.createElement('tr')
     const nameTd = document.createElement('td')
-    const icon = document.createElement('i')
-    icon.className = 'bi bi-file-earmark'
+    const icon = document.createElement('span')
+    icon.className = 'icon-[lucide--file]'
     nameTd.appendChild(icon)
     nameTd.appendChild(document.createTextNode(' ' + f.name))
     const sizeTd = document.createElement('td')
-    sizeTd.className = 'text-end text-secondary text-nowrap'
+    sizeTd.className = 'text-right whitespace-nowrap text-neutral-400'
     sizeTd.textContent = f.size
     const modTd = document.createElement('td')
-    modTd.className = 'text-secondary text-nowrap'
+    modTd.className = 'whitespace-nowrap text-neutral-400'
     modTd.textContent = f.modified
     const actTd = document.createElement('td')
-    actTd.className = 'text-end'
+    actTd.className = 'text-right'
     const btn = document.createElement('button')
     btn.type = 'button'
     btn.className = 'btn btn-sm btn-outline-danger'
     btn.setAttribute('data-name', f.name)
-    btn.innerHTML = '<i class="bi bi-trash"></i> Delete'
+    btn.innerHTML = '<span class="icon-[lucide--trash-2]"></span> Delete'
     actTd.appendChild(btn)
     tr.appendChild(nameTd)
     tr.appendChild(sizeTd)
@@ -295,7 +296,7 @@ es.addEventListener('lock', (e) => {
   if (lock === 'stage' && !staging) {
     renderJob(null)
   } else if (!lock && !staging && jobStatus.textContent === 'Staging files…') {
-    jobBox.classList.add('d-none')
+    jobBox.classList.add('hidden')
   }
 })
 es.addEventListener('files', (e) => {
@@ -522,14 +523,14 @@ picker.addEventListener('change', () => {
 })
 drop.addEventListener('dragover', (e) => {
   e.preventDefault()
-  if (!isBusy()) drop.classList.add('border-primary')
+  if (!isBusy()) drop.classList.add('border-blue-500')
 })
 drop.addEventListener('dragleave', () => {
-  drop.classList.remove('border-primary')
+  drop.classList.remove('border-blue-500')
 })
 drop.addEventListener('drop', (e) => {
   e.preventDefault()
-  drop.classList.remove('border-primary')
+  drop.classList.remove('border-blue-500')
   let files: File[] = []
   let dirRejected = false
   const items = e.dataTransfer?.items

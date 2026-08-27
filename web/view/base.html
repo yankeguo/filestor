@@ -1,31 +1,17 @@
 {{define "head"}}
-{{/* main.css comes before Bootstrap: any class both define (container, col-12, …) keeps Bootstrap's meaning. */}}
 <link href="{{cssAsset "main"}}" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"
-  integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
-  crossorigin="anonymous">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css" rel="stylesheet"
-  integrity="sha384-CK2SzKma4jA5H/MXDUU7i1TqZlCFaD4T01vtyDFvPlD97JQyS+IsSh1nI2EFbpyk"
-  crossorigin="anonymous">
-<script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
-  integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
-  crossorigin="anonymous"></script>
-<style>
-  body { padding-top: 4.5rem; }
-  .browse-day { scroll-margin-top: 5rem; }
-</style>
 {{end}}
 
 {{define "nav"}}
-<header class="navbar border-bottom fixed-top bg-body">
-  <div class="container-fluid gap-3">
-    <a class="navbar-brand mb-0 h1" href="/"><i class="bi bi-folder2-open"></i> filestor</a>
-    <ul class="navbar-nav flex-row gap-3 me-auto">
-      <li class="nav-item"><a class="nav-link{{if eq .Nav "browse"}} active{{end}}" href="/browse"><i class="bi bi-folder2"></i> Browse</a></li>
-      <li class="nav-item"><a class="nav-link{{if eq .Nav "upload"}} active{{end}}" href="/upload"><i class="bi bi-cloud-arrow-up"></i> Upload</a></li>
-    </ul>
+<header class="fixed inset-x-0 top-0 z-40 border-b border-neutral-700 bg-neutral-900">
+  <div class="flex items-center gap-4 px-4 py-3">
+    <a class="flex items-center gap-1.5 text-xl font-semibold text-white" href="/"><span class="icon-[lucide--folder-open]"></span> filestor</a>
+    <nav class="me-auto flex gap-1">
+      <a class="nav-link{{if eq .Nav "browse"}} active{{end}}" href="/browse"><span class="icon-[lucide--folder]"></span> Browse</a>
+      <a class="nav-link{{if eq .Nav "upload"}} active{{end}}" href="/upload"><span class="icon-[lucide--cloud-upload]"></span> Upload</a>
+    </nav>
     <form method="post" action="/logout">
-      <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="bi bi-box-arrow-right"></i> Sign out</button>
+      <button type="submit" class="btn btn-sm btn-outline-secondary"><span class="icon-[lucide--log-out]"></span> Sign out</button>
     </form>
   </div>
 </header>

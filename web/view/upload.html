@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="dark">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,62 +8,62 @@
 </head>
 <body>
   {{template "nav" .}}
-  <main class="container py-4">
-    <p class="text-secondary mb-3">Staging files in <code>{{.Workspace}}</code>. They are not sent to the bucket yet.</p>
-    <p id="status" class="text-danger small mb-3 d-none"></p>
+  <main class="mx-auto max-w-screen-xl px-4 py-6">
+    <p class="mb-3 text-neutral-400">Staging files in <code>{{.Workspace}}</code>. They are not sent to the bucket yet.</p>
+    <p id="status" class="mb-3 hidden text-sm text-red-400"></p>
     <div class="card mb-3">
       <div class="card-body">
-        <div class="row g-2">
-          <div class="col-12 col-md-auto">
-            <label class="visually-hidden" for="push-time">Push time</label>
-            <input id="push-time" type="datetime-local" class="form-control" step="60" value="{{.Time}}">
+        <div class="flex flex-col gap-2 md:flex-row">
+          <div>
+            <label class="sr-only" for="push-time">Push time</label>
+            <input id="push-time" type="datetime-local" class="input" step="60" value="{{.Time}}">
           </div>
-          <div class="col">
-            <label class="visually-hidden" for="push-title">Title</label>
-            <input id="push-title" type="text" class="form-control" maxlength="80" value="{{.Title}}" placeholder="Title, e.g. weekly report">
+          <div class="flex-1">
+            <label class="sr-only" for="push-title">Title</label>
+            <input id="push-title" type="text" class="input" maxlength="80" value="{{.Title}}" placeholder="Title, e.g. weekly report">
           </div>
           {{if .CanAnalyze}}
-          <div class="col-12 col-md-auto">
-            <button id="analyze-btn" type="button" class="btn btn-info w-100" title="Analyze the staged files with the configured LLM">
-              <i class="bi bi-magic"></i> Analyze
+          <div>
+            <button id="analyze-btn" type="button" class="btn btn-info w-full md:w-auto" title="Analyze the staged files with the configured LLM">
+              <span class="icon-[lucide--sparkles]"></span> Analyze
             </button>
           </div>
           {{end}}
-          <div class="col-12 col-md-auto">
-            <button id="push-btn" type="button" class="btn btn-primary w-100"{{if and .CanAnalyze (not .Analyzed)}} disabled{{end}}>
-              <i class="bi bi-cloud-upload"></i> Commit
+          <div>
+            <button id="push-btn" type="button" class="btn btn-primary w-full md:w-auto"{{if and .CanAnalyze (not .Analyzed)}} disabled{{end}}>
+              <span class="icon-[lucide--cloud-upload]"></span> Commit
             </button>
           </div>
         </div>
-        <p id="analyze-hint" class="text-warning small mt-2 mb-0{{if or (not .CanAnalyze) .Analyzed}} d-none{{end}}">Run Analyze before uploading to the bucket.</p>
-        <p class="text-secondary small mt-2 mb-0">Staged files are pushed to the bucket as one bundle under <code>content/</code>, sharded by a fresh UUID, and removed from staging. The picked time is used as-is, whatever the timezone.</p>
-        <div id="job-box" class="mt-3 d-none">
-          <div class="progress" role="progressbar">
-            <div id="job-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div>
+        <p id="analyze-hint" class="mt-2 text-sm text-amber-400{{if or (not .CanAnalyze) .Analyzed}} hidden{{end}}">Run Analyze before uploading to the bucket.</p>
+        <p class="mt-2 text-sm text-neutral-400">Staged files are pushed to the bucket as one bundle under <code>content/</code>, sharded by a fresh UUID, and removed from staging. The picked time is used as-is, whatever the timezone.</p>
+        <div id="job-box" class="mt-3 hidden">
+          <div class="progress-track" role="progressbar">
+            <div id="job-bar" class="progress-fill" style="width:0%"></div>
           </div>
-          <p id="job-status" class="small mt-1 mb-0"></p>
+          <p id="job-status" class="mt-1 text-sm text-neutral-400"></p>
         </div>
       </div>
     </div>
-    <div id="drop" class="card border mb-3">
-      <div class="card-body text-center py-5">
-        <i class="bi bi-cloud-arrow-up d-block mb-2" style="font-size:2rem"></i>
+    <div id="drop" class="card mb-3">
+      <div class="card-body py-12 text-center">
+        <span class="icon-[lucide--cloud-upload] mb-2 text-4xl"></span>
         <p class="mb-2">Drop files here or</p>
-        <label id="picker-label" class="btn btn-outline-primary mb-0">
-          <i class="bi bi-plus-lg"></i> Choose files
+        <label id="picker-label" class="btn btn-outline-primary">
+          <span class="icon-[lucide--plus]"></span> Choose files
           <input id="picker" type="file" multiple hidden>
         </label>
-        <p class="text-secondary small mt-3 mb-0">Flat files only — no folders, no hidden files starting with <code>.</code>; max 2 GiB per file.</p>
+        <p class="mt-3 text-sm text-neutral-400">Flat files only — no folders, no hidden files starting with <code>.</code>; max 2 GiB per file.</p>
       </div>
     </div>
     <div class="card">
-      <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
+      <div class="overflow-x-auto">
+        <table class="tbl tbl-hover">
           <thead>
             <tr>
               <th>Name</th>
-              <th class="text-end">Size</th>
-              <th class="text-nowrap">Modified</th>
+              <th class="text-right">Size</th>
+              <th class="whitespace-nowrap">Modified</th>
               <th></th>
             </tr>
           </thead>
@@ -71,19 +71,19 @@
             {{if .Files}}
               {{range .Files}}
               <tr>
-                <td><i class="bi bi-file-earmark"></i> {{.Name}}</td>
-                <td class="text-end text-secondary text-nowrap">{{.Size}}</td>
-                <td class="text-secondary text-nowrap">{{.Modified}}</td>
-                <td class="text-end">
+                <td><span class="icon-[lucide--file]"></span> {{.Name}}</td>
+                <td class="text-right whitespace-nowrap text-neutral-400">{{.Size}}</td>
+                <td class="whitespace-nowrap text-neutral-400">{{.Modified}}</td>
+                <td class="text-right">
                   <button type="button" class="btn btn-sm btn-outline-danger" data-name="{{.Name}}">
-                    <i class="bi bi-trash"></i> Delete
+                    <span class="icon-[lucide--trash-2]"></span> Delete
                   </button>
                 </td>
               </tr>
               {{end}}
             {{else}}
             <tr>
-              <td colspan="4" class="text-secondary">No files</td>
+              <td colspan="4" class="text-neutral-400">No files</td>
             </tr>
             {{end}}
           </tbody>

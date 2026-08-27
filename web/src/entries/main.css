@@ -1,8 +1,113 @@
-/* Tailwind v4 utilities, scanned from the Go templates. The theme is imported
-   by reference only (scale values are inlined as var() fallbacks) and preflight
-   is left out entirely so Bootstrap's reboot is not reset. base.html links this
-   stylesheet BEFORE Bootstrap so any class both frameworks define (container,
-   col-12, …) keeps Bootstrap's meaning; use utilities Bootstrap lacks. */
-@import "tailwindcss/theme" theme(reference);
-@import "tailwindcss/utilities";
+/* Tailwind v4 + Iconify lucide icons (build-time SVG masks, no runtime
+   requests). Full import — preflight included — since Bootstrap is gone.
+   Scans the views, the TS entries (dynamic DOM classes), and the top-level
+   Go files (icon names returned by fileIcon). */
+@import "tailwindcss";
+@plugin "@iconify/tailwind4";
 @source "../../view";
+@source "../../src";
+@source "../../../*.go";
+
+/* Dark chrome, formerly Bootstrap's data-bs-theme="dark". */
+:root {
+  color-scheme: dark;
+}
+
+body {
+  padding-top: 4.5rem; /* fixed navbar */
+  background-color: var(--color-neutral-900);
+  color: var(--color-neutral-200);
+}
+
+.browse-day {
+  scroll-margin-top: 5rem;
+}
+
+/* Mask icons are inline-block boxes; nudge them onto the text baseline. */
+[class*="icon-["] {
+  vertical-align: -0.125em;
+}
+
+/* Component classes live in the components layer so plain utilities can
+   still override them on the same element. */
+@layer components {
+  .card {
+    @apply rounded-lg border border-neutral-700 bg-neutral-800;
+  }
+  .card-header {
+    @apply border-b border-neutral-700 px-4 py-3 font-medium;
+  }
+  .card-body {
+    @apply p-4;
+  }
+
+  .btn {
+    @apply inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md border border-transparent px-3 py-1.5 text-sm font-medium transition-colors select-none disabled:pointer-events-none disabled:opacity-60;
+  }
+  .btn-sm {
+    @apply px-2 py-1 text-xs;
+  }
+  .btn-primary {
+    @apply bg-blue-600 text-white hover:bg-blue-500;
+  }
+  .btn-info {
+    @apply bg-cyan-600 text-white hover:bg-cyan-500;
+  }
+  .btn-outline-primary {
+    @apply border-blue-500 text-blue-400 hover:bg-blue-600 hover:text-white;
+  }
+  .btn-outline-secondary {
+    @apply border-neutral-600 text-neutral-300 hover:bg-neutral-700;
+  }
+  .btn-outline-danger {
+    @apply border-red-500 text-red-400 hover:bg-red-600 hover:text-white;
+  }
+
+  .input {
+    @apply w-full rounded-md border border-neutral-600 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 placeholder-neutral-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none disabled:opacity-60;
+  }
+
+  .badge {
+    @apply inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-400;
+  }
+
+  .nav-link {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-neutral-400 hover:text-white;
+  }
+  .nav-link.active {
+    @apply text-white;
+  }
+
+  /* File rows inside a card (home bundle list, bundle media list). */
+  .row-item {
+    @apply border-b border-neutral-700 px-4 py-2.5 last:border-b-0;
+  }
+  .row-link {
+    @apply flex items-center gap-2 border-b border-neutral-700 px-4 py-2.5 text-neutral-200 transition-colors last:border-b-0 hover:bg-neutral-700/40 hover:text-white;
+  }
+
+  /* Tables (.tbl on <table>). */
+  .tbl {
+    @apply w-full text-sm;
+  }
+  .tbl thead th {
+    @apply border-b border-neutral-600 px-3 py-2 text-left font-medium text-neutral-400;
+  }
+  .tbl tbody td,
+  .tbl tbody th {
+    @apply border-b border-neutral-700/60 px-3 py-2 align-middle;
+  }
+  .tbl tbody tr:last-child td {
+    @apply border-b-0;
+  }
+  .tbl-hover tbody tr:hover {
+    @apply bg-neutral-700/30;
+  }
+
+  .progress-track {
+    @apply h-2.5 w-full overflow-hidden rounded-full bg-neutral-700;
+  }
+  .progress-fill {
+    @apply h-full rounded-full bg-blue-500 transition-[width] duration-200;
+  }
+}

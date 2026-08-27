@@ -405,7 +405,7 @@ func TestBundleDetail(t *testing.T) {
 	require.Equal(t, prefix, store.lastListCall()[0])
 	body := rec.Body.String()
 	// Dedicated header: title, date and time from .meta.json, back link to the day.
-	require.Contains(t, body, "<h4 class=\"mb-1\">weekly-report</h4>")
+	require.Contains(t, body, "<h4 class=\"mb-1 text-lg font-semibold\">weekly-report</h4>")
 	require.Contains(t, body, "2026-08-24")
 	require.Contains(t, body, "06:59")
 	require.Contains(t, body, `/browse?month=2026-08&day=2026-08-24`)
@@ -419,7 +419,7 @@ func TestBundleDetail(t *testing.T) {
 	require.Contains(t, body, "<audio")
 	require.Contains(t, body, "/preview?key=content%2F55%2F0e%2F550e8400-e29b-41d4-a716-446655440000%2Fphoto.jpg")
 	// Non-previewable files keep a typed icon and download-only row.
-	require.Contains(t, body, "bi-file-earmark-pdf")
+	require.Contains(t, body, "icon-[lucide--file-text]")
 	require.Contains(t, body, `/download?key=content%2f55%2f0e%2f550e8400-e29b-41d4-a716-446655440000%2fnotes.pdf`)
 	// The generic breadcrumbs view is not rendered.
 	require.NotContains(t, body, "breadcrumb")
@@ -444,7 +444,7 @@ func TestBundleDetailSkipsOversizedImagePreview(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	require.NotContains(t, body, "<img")
-	require.Contains(t, body, "bi-file-earmark-image")
+	require.Contains(t, body, "icon-[lucide--file-image]")
 }
 
 func TestBundleDetailNotFound(t *testing.T) {
@@ -496,11 +496,11 @@ func TestPreviewKindAndFileIcon(t *testing.T) {
 	require.Equal(t, "", previewKind("a.pdf"))
 	require.Equal(t, "", previewKind("a"))
 
-	require.Equal(t, "bi-file-earmark-image", fileIcon("a.png"))
-	require.Equal(t, "bi-file-earmark-pdf", fileIcon("a.pdf"))
-	require.Equal(t, "bi-file-earmark-word", fileIcon("a.docx"))
-	require.Equal(t, "bi-file-earmark-zip", fileIcon("a.tar.gz"))
-	require.Equal(t, "bi-file-earmark", fileIcon("a"))
+	require.Equal(t, "icon-[lucide--file-image]", fileIcon("a.png"))
+	require.Equal(t, "icon-[lucide--file-text]", fileIcon("a.pdf"))
+	require.Equal(t, "icon-[lucide--file-type]", fileIcon("a.docx"))
+	require.Equal(t, "icon-[lucide--file-archive]", fileIcon("a.tar.gz"))
+	require.Equal(t, "icon-[lucide--file]", fileIcon("a"))
 }
 
 func TestPreviewRedirectsToInlineSignedURL(t *testing.T) {
@@ -694,7 +694,7 @@ func TestBrowseCalendarDayWithoutMonth(t *testing.T) {
 	body := rec.Body.String()
 	require.Contains(t, body, "March 2026")
 	// The selected cell is highlighted even though the day has no bundle.
-	require.Contains(t, body, `class="table-primary"`)
+	require.Contains(t, body, `class="p-0 bg-blue-600/20"`)
 	require.Contains(t, body, "No bundles on 2026-03-10.")
 }
 

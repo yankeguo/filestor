@@ -173,29 +173,30 @@ func fileExt(name string) string {
 	return strings.ToLower(name[i+1:])
 }
 
-// fileIcon picks a Bootstrap Icons class from the file extension.
+// fileIcon picks a lucide icon class (Iconify tailwind selector) from the
+// file extension.
 func fileIcon(name string) string {
 	switch fileExt(name) {
 	case "jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "svg", "ico", "heic":
-		return "bi-file-earmark-image"
+		return "icon-[lucide--file-image]"
 	case "mp4", "m4v", "webm", "mov", "mkv", "avi":
-		return "bi-file-earmark-play"
+		return "icon-[lucide--file-play]"
 	case "mp3", "wav", "ogg", "m4a", "flac", "aac":
-		return "bi-file-earmark-music"
+		return "icon-[lucide--file-audio]"
 	case "pdf":
-		return "bi-file-earmark-pdf"
+		return "icon-[lucide--file-text]"
 	case "txt", "md", "log", "json", "yaml", "yml", "xml", "csv":
-		return "bi-file-earmark-text"
+		return "icon-[lucide--file-text]"
 	case "doc", "docx":
-		return "bi-file-earmark-word"
+		return "icon-[lucide--file-type]"
 	case "xls", "xlsx":
-		return "bi-file-earmark-excel"
+		return "icon-[lucide--file-spreadsheet]"
 	case "ppt", "pptx":
-		return "bi-file-earmark-ppt"
+		return "icon-[lucide--presentation]"
 	case "zip", "tar", "gz", "tgz", "rar", "7z":
-		return "bi-file-earmark-zip"
+		return "icon-[lucide--file-archive]"
 	default:
-		return "bi-file-earmark"
+		return "icon-[lucide--file]"
 	}
 }
 
