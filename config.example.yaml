@@ -15,33 +15,32 @@ s3:
   # force_path_style: false
 upload:
   workspace: upload-workspace
-# Optional LLM endpoints and vector store. Each capability is keyed by
-# provider (unknown keys are rejected). chat.openai is used by file analysis
-# on the upload page; url and model must be set together, effort is the
-# model's reasoning effort, headers is an optional map of HTTP headers.
-# embeddings.bailian_multimodal_embedding is independent of chat (no
-# defaults); url and model must be set together, dimensions is optional.
-# vectors.aliyun_oss_vectors is an independent vector store; url includes the
-# bucket host (<bucket>.<region>.oss-vectors.aliyuncs.com), and url,
-# access_key_id, access_key_secret, and index must be set together.
-# llm:
-#   chat:
-#     openai:
-#       url: https://api.example.com/v1/chat/completions
-#       model: my-model
-#       effort: medium
-#       headers:
-#         Authorization: Bearer REPLACE_ME
-#   embeddings:
-#     bailian_multimodal_embedding:
-#       url: https://api.example.com/v1/embeddings
-#       model: my-embedding-model
-#       dimensions: 1024
-#       headers:
-#         Authorization: Bearer REPLACE_ME
-#   vectors:
-#     aliyun_oss_vectors:
-#       url: https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com
-#       access_key_id: REPLACE_ME
-#       access_key_secret: REPLACE_ME
-#       index: example-index
+# Required LLM endpoints and vector store; the server refuses to start when
+# any of them is missing. Each capability is keyed by provider (unknown keys
+# are rejected). chat.openai is used by file analysis on the upload page;
+# effort is the model's reasoning effort, headers is an optional map of HTTP
+# headers. embeddings.bailian_multimodal_embedding vectorizes the digest
+# marks at push time; dimensions is optional. vectors.aliyun_oss_vectors is
+# the vector store the digest embeddings are written into; url includes the
+# bucket host (<bucket>.<region>.oss-vectors.aliyuncs.com).
+llm:
+  chat:
+    openai:
+      url: https://api.example.com/v1/chat/completions
+      model: my-model
+      effort: medium
+      headers:
+        Authorization: Bearer REPLACE_ME
+  embeddings:
+    bailian_multimodal_embedding:
+      url: https://api.example.com/v1/embeddings
+      model: my-embedding-model
+      dimensions: 1024
+      headers:
+        Authorization: Bearer REPLACE_ME
+  vectors:
+    aliyun_oss_vectors:
+      url: https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com
+      access_key_id: REPLACE_ME
+      access_key_secret: REPLACE_ME
+      index: example-index

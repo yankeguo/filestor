@@ -188,6 +188,9 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 		}
 		job.Done++
 		s.emitProgress(job, false)
+		if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			log.Printf("push %s: uploaded %s (%s)", prefix, name, formatSize(info.Size()))
+		}
 	}
 	for _, name := range digest {
 		job.File = bundleDigestDir + "/" + name
@@ -198,6 +201,7 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 		}
 		job.Done++
 		s.emitProgress(job, false)
+		log.Printf("push %s: uploaded %s", prefix, job.File)
 	}
 	// Embed the digest marks and write the vectors before the bundle becomes
 	// discoverable (meta) and recorded (index): a failure here stops the job
@@ -222,12 +226,17 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 			return
 		}
 		job.Message = ""
+	} else if len(digest) == 0 {
+		log.Printf("push %s: no digest marks, skipping embedding", prefix)
+	} else {
+		log.Printf("push %s: embedding pipeline not configured, skipping %d digest marks", prefix, len(digest))
 	}
 	// The bundle is complete: publish its meta, then record it in the index.
 	if err := s.store.Put(prefix+"/"+bundleMetaName, bytes.NewReader(raw), int64(len(raw))); err != nil {
 		fail(bundleMetaName, err)
 		return
 	}
+	log.Printf("push %s: %s published", prefix, bundleMetaName)
 	if err := s.index.append(s.store, meta); err != nil {
 		log.Println("push index:", err)
 		job.Error = fmt.Sprintf("index: %v (bundle %s)", err, prefix)
@@ -237,11 +246,15 @@ func (s *Server) runPush(job jobProgress, dir, prefix string, names []string, me
 	}
 	// The bundle is recorded; drop the staged copies. A failed delete only
 	// leaves a duplicate behind, so it is logged, not fatal.
+	removed := 0
 	for _, name := range names {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil {
 			log.Println("remove staged file:", err)
+		} else {
+			removed++
 		}
 	}
+	log.Printf("push %s: removed %d/%d staged files", prefix, removed, len(names))
 	s.clearWorkspaceStateIfEmpty()
 	job.File = ""
 	s.emitFiles()

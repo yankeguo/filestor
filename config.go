@@ -40,8 +40,9 @@ type UploadConfig struct {
 	Workspace string `yaml:"workspace"`
 }
 
-// LLMConfig groups optional chat, embeddings, and vector-store backends.
-// Each capability is keyed by provider; unknown provider keys are rejected.
+// LLMConfig groups the chat, embeddings, and vector-store backends; all
+// three are required. Each capability is keyed by provider; unknown provider
+// keys are rejected.
 type LLMConfig struct {
 	Chat       ChatConfig       `yaml:"chat"`
 	Embeddings EmbeddingsConfig `yaml:"embeddings"`
@@ -49,7 +50,7 @@ type LLMConfig struct {
 }
 
 // ChatConfig holds chat providers. openai is an OpenAI-compatible chat
-// endpoint used by POST /upload/analyze; url and model must be set together.
+// endpoint used by POST /upload/analyze; url and model are required.
 type ChatConfig struct {
 	OpenAI OpenAIChatConfig `yaml:"openai"`
 }
@@ -62,8 +63,8 @@ type OpenAIChatConfig struct {
 }
 
 // EmbeddingsConfig holds embeddings providers. bailian_multimodal_embedding
-// is independent of chat (no fallback); url and model must be set together,
-// dimensions is optional.
+// is the DashScope multimodal embedding endpoint used to vectorize the digest
+// marks at push time; url and model are required, dimensions is optional.
 type EmbeddingsConfig struct {
 	BailianMultimodalEmbedding BailianMultimodalEmbeddingConfig `yaml:"bailian_multimodal_embedding"`
 }
@@ -75,9 +76,10 @@ type BailianMultimodalEmbeddingConfig struct {
 	Dimensions int               `yaml:"dimensions"`
 }
 
-// VectorsConfig holds vector-store providers. aliyun_oss_vectors is
-// independent of embeddings (no fallback); url (bucket is in the host),
-// access_key_id, access_key_secret, and index must be set together.
+// VectorsConfig holds vector-store providers. aliyun_oss_vectors is the
+// Aliyun OSS Vectors index the digest embeddings are written into; url
+// (bucket is in the host), access_key_id, access_key_secret, and index are
+// all required.
 type VectorsConfig struct {
 	AliyunOSSVectors AliyunOSSVectorsConfig `yaml:"aliyun_oss_vectors"`
 }
@@ -149,19 +151,25 @@ func (c *Config) validate() error {
 	openai.URL = strings.TrimSpace(openai.URL)
 	openai.Model = strings.TrimSpace(openai.Model)
 	openai.Effort = strings.TrimSpace(openai.Effort)
-	if (openai.URL == "") != (openai.Model == "") {
-		return fmt.Errorf("config: llm.chat.openai.url and llm.chat.openai.model must be set together")
+	openai.Headers = normalizeHeaders(openai.Headers)
+	if openai.URL == "" {
+		return fmt.Errorf("config: llm.chat.openai.url is required")
+	}
+	if openai.Model == "" {
+		return fmt.Errorf("config: llm.chat.openai.model is required")
 	}
 	if err := requireHTTPURL("llm.chat.openai.url", openai.URL); err != nil {
 		return err
 	}
-	openai.Headers = normalizeHeaders(openai.Headers)
 	emb := &c.LLM.Embeddings.BailianMultimodalEmbedding
 	emb.URL = strings.TrimSpace(emb.URL)
 	emb.Model = strings.TrimSpace(emb.Model)
 	emb.Headers = normalizeHeaders(emb.Headers)
-	if (emb.URL == "") != (emb.Model == "") {
-		return fmt.Errorf("config: llm.embeddings.bailian_multimodal_embedding.url and llm.embeddings.bailian_multimodal_embedding.model must be set together")
+	if emb.URL == "" {
+		return fmt.Errorf("config: llm.embeddings.bailian_multimodal_embedding.url is required")
+	}
+	if emb.Model == "" {
+		return fmt.Errorf("config: llm.embeddings.bailian_multimodal_embedding.model is required")
 	}
 	if err := requireHTTPURL("llm.embeddings.bailian_multimodal_embedding.url", emb.URL); err != nil {
 		return err
@@ -174,29 +182,23 @@ func (c *Config) validate() error {
 	vec.AccessKeyID = strings.TrimSpace(vec.AccessKeyID)
 	vec.AccessKeySecret = strings.TrimSpace(vec.AccessKeySecret)
 	vec.Index = strings.TrimSpace(vec.Index)
-	n := 0
-	if vec.URL != "" {
-		n++
+	if vec.URL == "" {
+		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.url is required")
 	}
-	if vec.AccessKeyID != "" {
-		n++
+	if vec.AccessKeyID == "" {
+		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.access_key_id is required")
 	}
-	if vec.AccessKeySecret != "" {
-		n++
+	if vec.AccessKeySecret == "" {
+		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.access_key_secret is required")
 	}
-	if vec.Index != "" {
-		n++
-	}
-	if n != 0 && n != 4 {
-		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.url, llm.vectors.aliyun_oss_vectors.access_key_id, llm.vectors.aliyun_oss_vectors.access_key_secret, and llm.vectors.aliyun_oss_vectors.index must be set together")
+	if vec.Index == "" {
+		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.index is required")
 	}
 	if err := requireHTTPURL("llm.vectors.aliyun_oss_vectors.url", vec.URL); err != nil {
 		return err
 	}
-	if vec.URL != "" {
-		if _, _, err := parseVectorsEndpoint(vec.URL); err != nil {
-			return fmt.Errorf("config: %w", err)
-		}
+	if _, _, err := parseVectorsEndpoint(vec.URL); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 	return nil
 }

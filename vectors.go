@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -213,6 +214,7 @@ func (c *vectorsClient) putVectors(ctx context.Context, bundleID string, meta bu
 	if err != nil {
 		return err
 	}
+	log.Printf("vectors: writing %d vectors to index %s", len(items), c.cfg.Index)
 	endpoint := strings.TrimRight(c.cfg.URL, "/") + "/?putVectors"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {

@@ -237,6 +237,7 @@ func (x *bundleIndex) append(store ObjectStore, meta bundleMeta) error {
 	if err := store.Put(indexKey(when.Year(), when.Month()), bytes.NewReader(data), int64(len(data))); err != nil {
 		return err
 	}
+	log.Printf("bundle index: %s rewritten with %d entries", indexKey(when.Year(), when.Month()), len(list))
 	x.mu.Lock()
 	x.months[monthKey] = list
 	x.byID[strings.ToLower(meta.ID)] = meta

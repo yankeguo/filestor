@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -165,6 +166,7 @@ func (c *embedClient) embedDigest(ctx context.Context, dir string, names []strin
 		} else if len(vec) != dim {
 			return nil, fmt.Errorf("%s: embedding dimension %d does not match %d", name, len(vec), dim)
 		}
+		log.Printf("embed: %s embedded (dim %d)", name, len(vec))
 		vecs = append(vecs, vec)
 	}
 	return vecs, nil
