@@ -8,49 +8,51 @@
 </head>
 <body>
   {{template "nav" .}}
-  <main class="mx-auto max-w-screen-xl px-4 py-6">
-    <p class="mb-3">
-      <a href="/browse?month={{.BackMonth}}&day={{.Date}}#day-{{.Date}}" class="inline-flex items-center gap-1.5 text-blue-400 hover:text-blue-300">
+  <main class="mx-auto max-w-screen-xl px-4 py-8 sm:px-6">
+    <p class="mb-4">
+      <a href="/browse?month={{.BackMonth}}&day={{.Date}}#day-{{.Date}}" class="inline-flex items-center gap-1.5 text-sm text-zinc-400 transition-colors hover:text-white">
         <span class="icon-[lucide--arrow-left]"></span> {{.Date}}
       </a>
     </p>
-    <div class="card mb-3">
-      <div class="card-body flex flex-wrap items-center justify-between gap-2">
+    <div class="card mb-6">
+      <div class="card-body flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h4 class="mb-1 text-lg font-semibold">{{.Title}}</h4>
-          <div class="flex items-center gap-2 text-neutral-400">
-            <span class="icon-[lucide--calendar-days]"></span> {{.Date}}
-            <span class="icon-[lucide--clock]"></span> {{.TimeHM}}
+          <h4 class="mb-2 text-xl font-semibold tracking-tight text-white">{{.Title}}</h4>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="chip"><span class="icon-[lucide--calendar-days]"></span> {{.Date}}</span>
+            <span class="chip"><span class="icon-[lucide--clock]"></span> {{.TimeHM}}</span>
           </div>
         </div>
-        <div class="whitespace-nowrap text-neutral-400">
+        <div class="chip">
           <span class="icon-[lucide--files]"></span> {{.FileCount}} files &middot; {{.TotalSize}}
         </div>
       </div>
     </div>
     {{if .HasImages}}
-    <div class="mb-3 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+    <div class="mb-6 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
       {{range .Files}}{{if eq .Kind "image"}}
       <div>
-        <a href="{{.PreviewURL}}" target="_blank" rel="noopener" class="card block h-full overflow-hidden transition-colors hover:border-neutral-500">
-          <img src="{{.PreviewURL}}" class="h-40 w-full object-cover" loading="lazy" alt="{{.Name}}">
-          <div class="truncate px-3 py-2 text-sm text-neutral-200">{{.Name}}</div>
+        <a href="{{.PreviewURL}}" target="_blank" rel="noopener" class="card group block h-full overflow-hidden transition-colors hover:border-zinc-600">
+          <div class="overflow-hidden">
+            <img src="{{.PreviewURL}}" class="h-40 w-full object-cover transition-transform duration-300 group-hover:scale-105" loading="lazy" alt="{{.Name}}">
+          </div>
+          <div class="truncate px-3 py-2 text-sm text-zinc-300">{{.Name}}</div>
         </a>
       </div>
       {{end}}{{end}}
     </div>
     {{end}}
     {{if .HasMedia}}
-    <div class="card mb-3">
+    <div class="card mb-6">
       <div>
         {{range .Files}}{{if eq .Kind "video"}}
         <div class="row-item">
-          <div class="mb-1 text-sm text-neutral-400"><span class="{{.Icon}}"></span> {{.Name}}</div>
-          <video controls preload="none" src="{{.PreviewURL}}" class="max-h-[360px] w-full rounded"></video>
+          <div class="mb-2 flex items-center gap-1.5 text-sm text-zinc-400"><span class="{{.Icon}} text-zinc-500"></span> {{.Name}}</div>
+          <video controls preload="none" src="{{.PreviewURL}}" class="max-h-[360px] w-full rounded-lg bg-black"></video>
         </div>
         {{else if eq .Kind "audio"}}
         <div class="row-item">
-          <div class="mb-1 text-sm text-neutral-400"><span class="{{.Icon}}"></span> {{.Name}}</div>
+          <div class="mb-2 flex items-center gap-1.5 text-sm text-zinc-400"><span class="{{.Icon}} text-zinc-500"></span> {{.Name}}</div>
           <audio controls preload="none" src="{{.PreviewURL}}" class="w-full"></audio>
         </div>
         {{end}}{{end}}
@@ -73,15 +75,15 @@
             <tr>
               <td>
                 {{if .PreviewURL}}
-                <a href="{{.PreviewURL}}" target="_blank" rel="noopener" class="text-blue-400 hover:text-blue-300">
-                  <span class="{{.Icon}}"></span> {{.Name}}
+                <a href="{{.PreviewURL}}" target="_blank" rel="noopener" class="text-indigo-300 transition-colors hover:text-indigo-200">
+                  <span class="{{.Icon}} text-zinc-500"></span> {{.Name}}
                 </a>
                 {{else}}
-                <span class="{{.Icon}}"></span> {{.Name}}
+                <span class="{{.Icon}} text-zinc-500"></span> {{.Name}}
                 {{end}}
               </td>
-              <td class="text-right whitespace-nowrap text-neutral-400">{{.Size}}</td>
-              <td class="whitespace-nowrap text-neutral-400">{{.LastModified}}</td>
+              <td class="text-right whitespace-nowrap text-zinc-500 tabular-nums">{{.Size}}</td>
+              <td class="whitespace-nowrap text-zinc-500 tabular-nums">{{.LastModified}}</td>
               <td class="text-right">
                 <a href="/download?key={{.Key}}" class="btn btn-sm btn-outline-primary">
                   <span class="icon-[lucide--download]"></span> Download
@@ -91,7 +93,7 @@
             {{end}}
             {{if not .Files}}
             <tr>
-              <td colspan="4" class="text-neutral-400">No files</td>
+              <td colspan="4" class="text-zinc-500">No files</td>
             </tr>
             {{end}}
           </tbody>

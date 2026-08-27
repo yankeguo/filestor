@@ -6,21 +6,24 @@
   <title>filestor — sign in</title>
   {{template "head" .}}
 </head>
-<body class="flex min-h-screen items-center justify-center">
-  <form class="card w-[min(360px,92vw)]" method="post" action="/login">
-    <div class="flex flex-col gap-3 p-6">
-      <h1 class="flex items-center gap-1.5 text-lg font-semibold"><span class="icon-[lucide--folder-open]"></span> filestor</h1>
-      <p class="text-neutral-400">Sign in</p>
-      {{if .Error}}<p class="text-red-400">{{.Error}}</p>{{end}}
+<body class="flex min-h-screen items-center justify-center px-4">
+  <form class="card w-[min(380px,92vw)] shadow-xl shadow-black/40" method="post" action="/login">
+    <div class="flex flex-col gap-4 p-8">
+      <div class="mb-1 flex flex-col items-start gap-2">
+        <span class="icon-[lucide--folder-open] text-3xl text-indigo-400"></span>
+        <h1 class="text-xl font-semibold tracking-tight text-white">filestor</h1>
+        <p class="-mt-2 text-sm text-zinc-500">Sign in to continue</p>
+      </div>
+      {{if .Error}}<p class="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-300 ring-1 ring-red-500/30 ring-inset">{{.Error}}</p>{{end}}
       <div>
-        <label class="mb-1 block text-sm text-neutral-300" for="username"><span class="icon-[lucide--user]"></span> Username</label>
+        <label class="mb-1.5 block text-sm font-medium text-zinc-300" for="username"><span class="icon-[lucide--user] text-zinc-500"></span> Username</label>
         <input class="input" id="username" name="username" autocomplete="username" required autofocus>
       </div>
       <div>
-        <label class="mb-1 block text-sm text-neutral-300" for="password"><span class="icon-[lucide--lock]"></span> Password</label>
+        <label class="mb-1.5 block text-sm font-medium text-zinc-300" for="password"><span class="icon-[lucide--lock] text-zinc-500"></span> Password</label>
         <input class="input" id="password" type="password" name="password" autocomplete="current-password" required>
       </div>
-      <button type="submit" class="btn btn-primary"><span class="icon-[lucide--log-in]"></span> Sign in</button>
+      <button type="submit" class="btn btn-primary mt-1"><span class="icon-[lucide--log-in]"></span> Sign in</button>
     </div>
   </form>
 </body>

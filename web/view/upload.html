@@ -8,10 +8,10 @@
 </head>
 <body>
   {{template "nav" .}}
-  <main class="mx-auto max-w-screen-xl px-4 py-6">
-    <p class="mb-3 text-neutral-400">Staging files in <code>{{.Workspace}}</code>. They are not sent to the bucket yet.</p>
-    <p id="status" class="mb-3 hidden text-sm text-red-400"></p>
-    <div class="card mb-3">
+  <main class="mx-auto max-w-screen-xl px-4 py-8 sm:px-6">
+    <p class="mb-4 text-sm text-zinc-500">Staging files in <code class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">{{.Workspace}}</code>. They are not sent to the bucket yet.</p>
+    <p id="status" class="mb-4 hidden rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-300 ring-1 ring-red-500/30 ring-inset"></p>
+    <div class="card mb-6">
       <div class="card-body">
         <div class="flex flex-col gap-2 md:flex-row">
           <div>
@@ -35,25 +35,25 @@
             </button>
           </div>
         </div>
-        <p id="analyze-hint" class="mt-2 text-sm text-amber-400{{if or (not .CanAnalyze) .Analyzed}} hidden{{end}}">Run Analyze before uploading to the bucket.</p>
-        <p class="mt-2 text-sm text-neutral-400">Staged files are pushed to the bucket as one bundle under <code>content/</code>, sharded by a fresh UUID, and removed from staging. The picked time is used as-is, whatever the timezone.</p>
-        <div id="job-box" class="mt-3 hidden">
+        <p id="analyze-hint" class="mt-3 text-sm text-amber-300{{if or (not .CanAnalyze) .Analyzed}} hidden{{end}}">Run Analyze before uploading to the bucket.</p>
+        <p class="mt-3 text-sm text-zinc-500">Staged files are pushed to the bucket as one bundle under <code class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">content/</code>, sharded by a fresh UUID, and removed from staging. The picked time is used as-is, whatever the timezone.</p>
+        <div id="job-box" class="mt-4 hidden">
           <div class="progress-track" role="progressbar">
             <div id="job-bar" class="progress-fill" style="width:0%"></div>
           </div>
-          <p id="job-status" class="mt-1 text-sm text-neutral-400"></p>
+          <p id="job-status" class="mt-1.5 text-sm text-zinc-400"></p>
         </div>
       </div>
     </div>
-    <div id="drop" class="card mb-3">
-      <div class="card-body py-12 text-center">
-        <span class="icon-[lucide--cloud-upload] mb-2 text-4xl"></span>
-        <p class="mb-2">Drop files here or</p>
+    <div id="drop" class="mb-6 rounded-xl border-2 border-dashed border-zinc-700 bg-zinc-900/50 transition-colors">
+      <div class="px-6 py-14 text-center">
+        <span class="icon-[lucide--cloud-upload] mb-3 text-4xl text-zinc-600"></span>
+        <p class="mb-3 text-zinc-300">Drop files here or</p>
         <label id="picker-label" class="btn btn-outline-primary">
           <span class="icon-[lucide--plus]"></span> Choose files
           <input id="picker" type="file" multiple hidden>
         </label>
-        <p class="mt-3 text-sm text-neutral-400">Flat files only — no folders, no hidden files starting with <code>.</code>; max 2 GiB per file.</p>
+        <p class="mt-4 text-xs text-zinc-500">Flat files only — no folders, no hidden files starting with <code>.</code>; max 2 GiB per file.</p>
       </div>
     </div>
     <div class="card">
@@ -71,9 +71,9 @@
             {{if .Files}}
               {{range .Files}}
               <tr>
-                <td><span class="icon-[lucide--file]"></span> {{.Name}}</td>
-                <td class="text-right whitespace-nowrap text-neutral-400">{{.Size}}</td>
-                <td class="whitespace-nowrap text-neutral-400">{{.Modified}}</td>
+                <td><span class="icon-[lucide--file] text-zinc-500"></span> {{.Name}}</td>
+                <td class="text-right whitespace-nowrap text-zinc-500 tabular-nums">{{.Size}}</td>
+                <td class="whitespace-nowrap text-zinc-500 tabular-nums">{{.Modified}}</td>
                 <td class="text-right">
                   <button type="button" class="btn btn-sm btn-outline-danger" data-name="{{.Name}}">
                     <span class="icon-[lucide--trash-2]"></span> Delete
@@ -83,7 +83,7 @@
               {{end}}
             {{else}}
             <tr>
-              <td colspan="4" class="text-neutral-400">No files</td>
+              <td colspan="4" class="text-zinc-500">No files</td>
             </tr>
             {{end}}
           </tbody>

@@ -3,9 +3,11 @@
 {{end}}
 
 {{define "nav"}}
-<header class="fixed inset-x-0 top-0 z-40 border-b border-neutral-700 bg-neutral-900">
-  <div class="flex items-center gap-4 px-4 py-3">
-    <a class="flex items-center gap-1.5 text-xl font-semibold text-white" href="/"><span class="icon-[lucide--folder-open]"></span> filestor</a>
+<header class="fixed inset-x-0 top-0 z-40 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
+  <div class="flex h-14 items-center gap-3 px-4 sm:px-6">
+    <a class="flex items-center gap-2 text-lg font-semibold tracking-tight text-white" href="/">
+      <span class="icon-[lucide--folder-open] text-indigo-400"></span> filestor
+    </a>
     <nav class="me-auto flex gap-1">
       <a class="nav-link{{if eq .Nav "browse"}} active{{end}}" href="/browse"><span class="icon-[lucide--folder]"></span> Browse</a>
       <a class="nav-link{{if eq .Nav "upload"}} active{{end}}" href="/upload"><span class="icon-[lucide--cloud-upload]"></span> Upload</a>

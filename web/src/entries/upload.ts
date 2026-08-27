@@ -173,7 +173,7 @@ function setBar(pct: number, animated: boolean, status: string, cls?: string): v
   else jobBar.classList.remove('animate-pulse')
   jobBar.style.width = pct + '%'
   jobBar.textContent = pct + '%'
-  jobStatus.className = 'mt-1 text-sm ' + (cls || 'text-neutral-400')
+  jobStatus.className = 'mt-1.5 text-sm ' + (cls || 'text-zinc-400')
   jobStatus.textContent = status
 }
 
@@ -187,7 +187,7 @@ function renderJob(job: JobProgress | null): void {
   }
   if (job.error) {
     const fail = job.kind === 'analyze' ? 'Analyze failed' : 'Upload failed: ' + job.error
-    setBar(parseInt(jobBar.style.width, 10) || 0, false, fail, 'text-red-400')
+    setBar(parseInt(jobBar.style.width, 10) || 0, false, fail, 'text-red-300')
     return
   }
   if (job.kind === 'analyze') {
@@ -212,11 +212,11 @@ function renderDone(job: JobProgress | null): void {
   if (job.kind === 'analyze') {
     if (job.title && document.activeElement !== pushTitle) pushTitle.value = job.title
     if (job.time && document.activeElement !== pushTime) pushTime.value = job.time
-    setBar(100, false, 'Analysis complete.', 'text-green-400')
+    setBar(100, false, 'Analysis complete.', 'text-emerald-400')
     return
   }
   if (job.kind === 'push') {
-    setBar(100, false, 'Uploaded to ' + (job.prefix || 'bucket'), 'text-green-400')
+    setBar(100, false, 'Uploaded to ' + (job.prefix || 'bucket'), 'text-emerald-400')
   }
 }
 
@@ -226,7 +226,7 @@ function render(files: WorkspaceFile[]): void {
     const empty = document.createElement('tr')
     const td = document.createElement('td')
     td.colSpan = 4
-    td.className = 'text-neutral-400'
+    td.className = 'text-zinc-500'
     td.textContent = 'No files'
     empty.appendChild(td)
     filesEl.appendChild(empty)
@@ -237,14 +237,14 @@ function render(files: WorkspaceFile[]): void {
     const tr = document.createElement('tr')
     const nameTd = document.createElement('td')
     const icon = document.createElement('span')
-    icon.className = 'icon-[lucide--file]'
+    icon.className = 'icon-[lucide--file] text-zinc-500'
     nameTd.appendChild(icon)
     nameTd.appendChild(document.createTextNode(' ' + f.name))
     const sizeTd = document.createElement('td')
-    sizeTd.className = 'text-right whitespace-nowrap text-neutral-400'
+    sizeTd.className = 'text-right whitespace-nowrap text-zinc-500 tabular-nums'
     sizeTd.textContent = f.size
     const modTd = document.createElement('td')
-    modTd.className = 'whitespace-nowrap text-neutral-400'
+    modTd.className = 'whitespace-nowrap text-zinc-500 tabular-nums'
     modTd.textContent = f.modified
     const actTd = document.createElement('td')
     actTd.className = 'text-right'
@@ -523,14 +523,19 @@ picker.addEventListener('change', () => {
 })
 drop.addEventListener('dragover', (e) => {
   e.preventDefault()
-  if (!isBusy()) drop.classList.add('border-blue-500')
+  if (!isBusy()) {
+    drop.classList.add('border-indigo-400/60')
+    drop.classList.add('bg-indigo-500/5')
+  }
 })
 drop.addEventListener('dragleave', () => {
-  drop.classList.remove('border-blue-500')
+  drop.classList.remove('border-indigo-400/60')
+  drop.classList.remove('bg-indigo-500/5')
 })
 drop.addEventListener('drop', (e) => {
   e.preventDefault()
-  drop.classList.remove('border-blue-500')
+  drop.classList.remove('border-indigo-400/60')
+  drop.classList.remove('bg-indigo-500/5')
   let files: File[] = []
   let dirRejected = false
   const items = e.dataTransfer?.items

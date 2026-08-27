@@ -405,7 +405,7 @@ func TestBundleDetail(t *testing.T) {
 	require.Equal(t, prefix, store.lastListCall()[0])
 	body := rec.Body.String()
 	// Dedicated header: title, date and time from .meta.json, back link to the day.
-	require.Contains(t, body, "<h4 class=\"mb-1 text-lg font-semibold\">weekly-report</h4>")
+	require.Contains(t, body, "<h4 class=\"mb-2 text-xl font-semibold tracking-tight text-white\">weekly-report</h4>")
 	require.Contains(t, body, "2026-08-24")
 	require.Contains(t, body, "06:59")
 	require.Contains(t, body, `/browse?month=2026-08&day=2026-08-24`)
@@ -694,7 +694,7 @@ func TestBrowseCalendarDayWithoutMonth(t *testing.T) {
 	body := rec.Body.String()
 	require.Contains(t, body, "March 2026")
 	// The selected cell is highlighted even though the day has no bundle.
-	require.Contains(t, body, `class="p-0 bg-blue-600/20"`)
+	require.Contains(t, body, `class="p-0 rounded-lg bg-indigo-500/15"`)
 	require.Contains(t, body, "No bundles on 2026-03-10.")
 }
 
