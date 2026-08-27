@@ -9,8 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func baseYAML() string {
-	return `
+const adminS3YAML = `
 admin:
   username: admin
   password: secret
@@ -21,6 +20,37 @@ s3:
   access_key_id: ak
   secret_access_key: sk
 `
+
+const chatBlock = `  chat:
+    openai:
+      url: https://api.example.com/v1/chat/completions
+      model: my-model
+`
+
+const embBlock = `  embeddings:
+    bailian_multimodal_embedding:
+      url: https://emb.example.com/v1/embeddings
+      model: emb-model
+`
+
+const vecBlock = `  vectors:
+    aliyun_oss_vectors:
+      url: https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com
+      access_key_id: vec-ak
+      access_key_secret: vec-sk
+      account_id: 1234567890123456
+      index: vec-index
+`
+
+const llmBlock = "llm:\n" + chatBlock + embBlock + vecBlock
+
+func baseYAML() string {
+	return adminS3YAML + llmBlock
+}
+
+// yamlWithLLM builds a full config around a custom llm section.
+func yamlWithLLM(llm string) string {
+	return adminS3YAML + llm
 }
 
 func TestLoadConfig(t *testing.T) {
@@ -44,7 +74,7 @@ func TestLoadConfig(t *testing.T) {
 func TestLoadConfigLLM(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
+	require.NoError(t, os.WriteFile(path, []byte(yamlWithLLM(`llm:
   chat:
     openai:
       url: ' https://api.example.com/v1/chat/completions '
@@ -53,7 +83,7 @@ func TestLoadConfigLLM(t *testing.T) {
       headers:
         Authorization: ' Bearer token '
         X-Team: blue
-`), 0o644))
+`+embBlock+vecBlock)), 0o644))
 	cfg, err := loadConfig(path)
 	require.NoError(t, err)
 	require.Equal(t, "https://api.example.com/v1/chat/completions", cfg.LLM.Chat.OpenAI.URL)
@@ -65,21 +95,15 @@ func TestLoadConfigLLM(t *testing.T) {
 func TestLoadConfigLLMEmbeddings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
-  chat:
-    openai:
-      url: https://api.example.com/v1/chat/completions
-      model: my-model
-      headers:
-        Authorization: Bearer token
-  embeddings:
+	require.NoError(t, os.WriteFile(path, []byte(yamlWithLLM(`llm:
+`+chatBlock+`  embeddings:
     bailian_multimodal_embedding:
       url: ' https://emb.example.com/v1/embeddings '
       model: ' emb-model '
       dimensions: 1024
       headers:
         Authorization: ' Bearer emb-token '
-`), 0o644))
+`+vecBlock)), 0o644))
 	cfg, err := loadConfig(path)
 	require.NoError(t, err)
 	emb := cfg.LLM.Embeddings.BailianMultimodalEmbedding
@@ -87,55 +111,44 @@ func TestLoadConfigLLMEmbeddings(t *testing.T) {
 	require.Equal(t, "emb-model", emb.Model)
 	require.Equal(t, 1024, emb.Dimensions)
 	require.Equal(t, map[string]string{"Authorization": "Bearer emb-token"}, emb.Headers)
-
-	// chat and embeddings are independent: embeddings gets no chat defaults.
-	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
-  chat:
-    openai:
-      url: https://api.example.com/v1/chat/completions
-      model: my-model
-      headers:
-        Authorization: Bearer token
-`), 0o644))
-	cfg, err = loadConfig(path)
-	require.NoError(t, err)
-	emb = cfg.LLM.Embeddings.BailianMultimodalEmbedding
-	require.Empty(t, emb.URL)
-	require.Empty(t, emb.Model)
-	require.Empty(t, emb.Headers)
-	require.Zero(t, emb.Dimensions)
 }
 
-func TestLoadConfigLLMEmbeddingsRequiresPair(t *testing.T) {
+func TestLoadConfigLLMRequired(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	for _, extra := range []string{
-		"llm:\n  embeddings:\n    bailian_multimodal_embedding:\n      model: emb-model\n",
-		"llm:\n  embeddings:\n    bailian_multimodal_embedding:\n      url: https://emb.example.com/v1/embeddings\n",
-	} {
-		require.NoError(t, os.WriteFile(path, []byte(baseYAML()+extra), 0o644))
-		_, err := loadConfig(path)
-		require.Error(t, err, extra)
-		require.Contains(t, err.Error(), "llm.embeddings.bailian_multimodal_embedding.url and llm.embeddings.bailian_multimodal_embedding.model")
+	cases := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{"no llm at all", adminS3YAML, "llm.chat.openai.url is required"},
+		{"chat url missing", yamlWithLLM("llm:\n  chat:\n    openai:\n      model: my-model\n" + embBlock + vecBlock), "llm.chat.openai.url is required"},
+		{"chat model missing", yamlWithLLM("llm:\n  chat:\n    openai:\n      url: https://api.example.com/v1/chat/completions\n" + embBlock + vecBlock), "llm.chat.openai.model is required"},
+		{"embeddings url missing", yamlWithLLM("llm:\n" + chatBlock + "  embeddings:\n    bailian_multimodal_embedding:\n      model: emb-model\n" + vecBlock), "llm.embeddings.bailian_multimodal_embedding.url is required"},
+		{"embeddings model missing", yamlWithLLM("llm:\n" + chatBlock + "  embeddings:\n    bailian_multimodal_embedding:\n      url: https://emb.example.com/v1/embeddings\n" + vecBlock), "llm.embeddings.bailian_multimodal_embedding.model is required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, os.WriteFile(path, []byte(tc.yaml), 0o644))
+			_, err := loadConfig(path)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
 	}
 }
 
 func TestLoadConfigLLMVectors(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
-  embeddings:
-    bailian_multimodal_embedding:
-      url: https://emb.example.com/v1/embeddings
-      model: emb-model
-  vectors:
+	require.NoError(t, os.WriteFile(path, []byte(yamlWithLLM(`llm:
+`+chatBlock+embBlock+`  vectors:
     aliyun_oss_vectors:
       url: ' https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com '
       access_key_id: ' vec-ak '
       access_key_secret: ' vec-sk '
       account_id: ' 1234567890123456 '
       index: ' vec-index '
-`), 0o644))
+`)), 0o644))
 	cfg, err := loadConfig(path)
 	require.NoError(t, err)
 	vec := cfg.LLM.Vectors.AliyunOSSVectors
@@ -144,25 +157,9 @@ func TestLoadConfigLLMVectors(t *testing.T) {
 	require.Equal(t, "vec-sk", vec.AccessKeySecret)
 	require.Equal(t, "1234567890123456", vec.AccountID)
 	require.Equal(t, "vec-index", vec.Index)
-
-	// embeddings and vectors are independent: vectors gets no embeddings defaults.
-	require.NoError(t, os.WriteFile(path, []byte(baseYAML()+`llm:
-  embeddings:
-    bailian_multimodal_embedding:
-      url: https://emb.example.com/v1/embeddings
-      model: emb-model
-`), 0o644))
-	cfg, err = loadConfig(path)
-	require.NoError(t, err)
-	vec = cfg.LLM.Vectors.AliyunOSSVectors
-	require.Empty(t, vec.URL)
-	require.Empty(t, vec.AccessKeyID)
-	require.Empty(t, vec.AccessKeySecret)
-	require.Empty(t, vec.AccountID)
-	require.Empty(t, vec.Index)
 }
 
-func TestLoadConfigLLMVectorsRequiresTogether(t *testing.T) {
+func TestLoadConfigLLMVectorsRequired(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	full := map[string]string{
@@ -175,32 +172,30 @@ func TestLoadConfigLLMVectorsRequiresTogether(t *testing.T) {
 	keys := []string{"url", "access_key_id", "access_key_secret", "account_id", "index"}
 	for _, skip := range keys {
 		var b strings.Builder
-		b.WriteString("llm:\n  vectors:\n    aliyun_oss_vectors:\n")
+		b.WriteString("  vectors:\n    aliyun_oss_vectors:\n")
 		for _, k := range keys {
 			if k == skip {
 				continue
 			}
 			b.WriteString("      " + k + ": " + full[k] + "\n")
 		}
-		require.NoError(t, os.WriteFile(path, []byte(baseYAML()+b.String()), 0o644))
+		require.NoError(t, os.WriteFile(path, []byte(yamlWithLLM("llm:\n"+chatBlock+embBlock+b.String())), 0o644))
 		_, err := loadConfig(path)
 		require.Error(t, err, skip)
-		require.Contains(t, err.Error(), "llm.vectors.aliyun_oss_vectors.url, llm.vectors.aliyun_oss_vectors.access_key_id, llm.vectors.aliyun_oss_vectors.access_key_secret, llm.vectors.aliyun_oss_vectors.account_id, and llm.vectors.aliyun_oss_vectors.index")
+		require.Contains(t, err.Error(), "llm.vectors.aliyun_oss_vectors."+skip+" is required")
 	}
 }
 
-func TestLoadConfigLLMRequiresPair(t *testing.T) {
+func TestLoadConfigLLMVectorsHostShape(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	for _, extra := range []string{
-		"llm:\n  chat:\n    openai:\n      url: https://api.example.com/v1/chat/completions\n",
-		"llm:\n  chat:\n    openai:\n      model: my-model\n",
-	} {
-		require.NoError(t, os.WriteFile(path, []byte(baseYAML()+extra), 0o644))
-		_, err := loadConfig(path)
-		require.Error(t, err, extra)
-		require.Contains(t, err.Error(), "llm.chat.openai.url and llm.chat.openai.model")
-	}
+	bad := strings.Replace(baseYAML(),
+		"https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com",
+		"https://example-bucket.oss-cn-hangzhou.aliyuncs.com", 1)
+	require.NoError(t, os.WriteFile(path, []byte(bad), 0o644))
+	_, err := loadConfig(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "oss-vectors.aliyuncs.com")
 }
 
 func TestLoadConfigUploadWorkspace(t *testing.T) {
@@ -225,7 +220,7 @@ s3:
   bucket: b
   access_key_id: ak
   secret_access_key: sk
-`), 0o644))
+`+llmBlock), 0o644))
 	cfg, err := loadConfig(path)
 	require.NoError(t, err)
 	require.Equal(t, "admin", cfg.Admin.Username)
@@ -270,8 +265,10 @@ func TestLoadConfigRejectsMissingS3(t *testing.T) {
 func TestLoadConfigLLMURLRequiresScheme(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	yaml := baseYAML() + "llm:\n  chat:\n    openai:\n      url: api.example.com/v1/chat/completions\n      model: my-model\n"
-	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o644))
+	bad := strings.Replace(baseYAML(),
+		"https://api.example.com/v1/chat/completions",
+		"api.example.com/v1/chat/completions", 1)
+	require.NoError(t, os.WriteFile(path, []byte(bad), 0o644))
 	_, err := loadConfig(path)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "llm.chat.openai.url must start with http:// or https://")

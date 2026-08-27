@@ -336,6 +336,9 @@ func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	s.emitProgress(jobProgress{Kind: lockAnalyze, Message: "starting", Total: rounds}, false)
+	log.Printf("analyze started: %d files, budget %d rounds/%d tool calls, model %s",
+		len(files), rounds, toolCalls, s.Config.LLM.Chat.OpenAI.Model)
+	started := time.Now()
 	go func() {
 		defer s.release(lockAnalyze)
 		defer func() {
@@ -365,6 +368,8 @@ func (s *Server) handleUploadAnalyze(w http.ResponseWriter, r *http.Request) {
 		}
 		s.emitState()
 		s.emitDone(jobProgress{Kind: lockAnalyze, Title: title, Time: ag.when})
+		log.Printf("analyze finished: title=%q time=%q digest=%d texts/%d images in %s",
+			title, ag.when, ag.digestTexts, len(ag.digestImages), time.Since(started).Round(time.Second))
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
 }
@@ -383,6 +388,7 @@ func (a *analyzeAgent) setTitle(title string) error {
 		return err
 	}
 	a.title = title
+	log.Printf("analyze: title set: %s", title)
 	if a.onState != nil {
 		a.onState()
 	}
@@ -488,6 +494,36 @@ type analyzeEntry struct {
 	Failed    bool     // every conversion of a convertible kind failed
 }
 
+// summary describes the entry's pre-converted forms for log lines.
+func (e *analyzeEntry) summary() string {
+	var parts []string
+	if e.Text != "" {
+		parts = append(parts, fmt.Sprintf("text %d lines", e.TextLines))
+	}
+	if len(e.Pages) > 0 {
+		parts = append(parts, fmt.Sprintf("%d pages", len(e.Pages)))
+	}
+	if len(e.Frames) > 0 {
+		parts = append(parts, fmt.Sprintf("%d frames", len(e.Frames)))
+	}
+	if e.Image != "" {
+		parts = append(parts, "normalized image")
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, ", ")
+	}
+	if e.Failed {
+		return "conversion failed"
+	}
+	if e.Kind == kindText {
+		return fmt.Sprintf("native text, %d lines", e.Lines)
+	}
+	if e.Kind == kindImage {
+		return "native image"
+	}
+	return "no readable form"
+}
+
 // derivedNames lists the entry's product names under .filestor/analyze.
 func (e *analyzeEntry) derivedNames() []string {
 	var out []string
@@ -548,6 +584,8 @@ func writeDerived(analyzeDir, name string, data []byte) bool {
 // failed conversion never aborts the run; the entry is marked instead.
 func prepEntry(ctx context.Context, dir, analyzeDir string, f workspaceFile) *analyzeEntry {
 	e := &analyzeEntry{Name: f.Name, Size: f.Size, Kind: classifyStagedFile(dir, f.Name)}
+	log.Printf("analyze: converting %s (%s, %s)", f.Name, f.Size, e.Kind)
+	defer func() { log.Printf("analyze: converted %s: %s", f.Name, e.summary()) }()
 	src := filepath.Join(dir, f.Name)
 	writeText := func(text string) {
 		// Whitespace-only text means no readable text was found (e.g. a
@@ -1087,6 +1125,7 @@ func (a *analyzeAgent) toolMarkText(text string) string {
 		a.digestTexts--
 		return "error: " + err.Error()
 	}
+	log.Printf("analyze: digest text chunk %d (%d bytes)", a.digestTexts, len(text))
 	return fmt.Sprintf("marked text chunk %d/%d", a.digestTexts, analyzeDigestMaxTexts)
 }
 
@@ -1153,6 +1192,7 @@ func (a *analyzeAgent) toolMarkImage(name string) string {
 		return "error: " + err.Error()
 	}
 	a.digestImages[product] = true
+	log.Printf("analyze: digest image %s", product)
 	return fmt.Sprintf("marked `%s` as digest image %d/%d", product, len(a.digestImages), analyzeDigestMaxImages)
 }
 
@@ -1181,6 +1221,9 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 	a.progress(jobProgress{Message: tc.Function.Name, File: args.Name})
 	if a.readsClosed && (tc.Function.Name == "read_file" || tc.Function.Name == "load_media" || tc.Function.Name == "rename_file") {
 		return reply("error: file reading is closed; wrap up now")
+	}
+	if tc.Function.Name == "read_file" || tc.Function.Name == "load_media" {
+		log.Printf("analyze: tool %s %s", tc.Function.Name, args.Name)
 	}
 	switch tc.Function.Name {
 	case "read_file":
@@ -1218,6 +1261,7 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 		}
 		// Return the complete updated roster so later read/mark calls use
 		// the new names.
+		log.Printf("analyze: renamed %s to %s", oldName, newName)
 		return reply("renamed to `" + newName + "`\n\n" + buildAnalyzeListing(a.list))
 	case "mark_text":
 		return reply(a.toolMarkText(args.Text))
@@ -1225,6 +1269,7 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 		return reply(a.toolMarkImage(args.Name))
 	case "finish":
 		a.finished = true
+		log.Println("analyze: finish called")
 		return reply("analysis finished")
 	case "set_title":
 		// Apply the same sanitizing as the finalize plain-text fallback so
@@ -1248,6 +1293,7 @@ func (a *analyzeAgent) runTool(ctx context.Context, tc chatToolCall) (chatMessag
 			return reply("error: " + err.Error())
 		}
 		a.when = when
+		log.Printf("analyze: datetime set: %s", when)
 		if a.onState != nil {
 			a.onState()
 		}

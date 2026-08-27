@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -32,13 +33,21 @@ func NewServer(cfg *Config, store ObjectStore) *Server {
 		if err := prepWorkspace(s.workspaceDir()); err != nil {
 			log.Println("prepare workspace:", err)
 		}
-		// The digest embedding pipeline needs both sides; with only one
-		// configured it stays off.
-		if e, v := cfg.LLM.Embeddings.BailianMultimodalEmbedding, cfg.LLM.Vectors.AliyunOSSVectors; (e.URL != "") != (v.URL != "") {
-			log.Println("config: llm.embeddings and llm.vectors take effect only together; digest embedding is off")
-		}
+		log.Printf("llm: chat=%s (%s), embeddings=%s (%s), vectors index=%s",
+			cfg.LLM.Chat.OpenAI.Model, urlHost(cfg.LLM.Chat.OpenAI.URL),
+			cfg.LLM.Embeddings.BailianMultimodalEmbedding.Model, urlHost(cfg.LLM.Embeddings.BailianMultimodalEmbedding.URL),
+			cfg.LLM.Vectors.AliyunOSSVectors.Index)
 	}
 	return s
+}
+
+// urlHost returns just the host of a configured URL for log lines (never any
+// credentials, which live in headers).
+func urlHost(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil {
+		return u.Host
+	}
+	return rawURL
 }
 
 func (s *Server) Handler() http.Handler {
