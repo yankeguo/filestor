@@ -38,6 +38,7 @@ const vecBlock = `  vectors:
       url: https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com
       access_key_id: vec-ak
       access_key_secret: vec-sk
+      account_id: 1234567890123456
       index: vec-index
 `
 
@@ -145,6 +146,7 @@ func TestLoadConfigLLMVectors(t *testing.T) {
       url: ' https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com '
       access_key_id: ' vec-ak '
       access_key_secret: ' vec-sk '
+      account_id: ' 1234567890123456 '
       index: ' vec-index '
 `)), 0o644))
 	cfg, err := loadConfig(path)
@@ -153,6 +155,7 @@ func TestLoadConfigLLMVectors(t *testing.T) {
 	require.Equal(t, "https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com", vec.URL)
 	require.Equal(t, "vec-ak", vec.AccessKeyID)
 	require.Equal(t, "vec-sk", vec.AccessKeySecret)
+	require.Equal(t, "1234567890123456", vec.AccountID)
 	require.Equal(t, "vec-index", vec.Index)
 }
 
@@ -163,9 +166,10 @@ func TestLoadConfigLLMVectorsRequired(t *testing.T) {
 		"url":               "https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com",
 		"access_key_id":     "vec-ak",
 		"access_key_secret": "vec-sk",
+		"account_id":        "1234567890123456",
 		"index":             "vec-index",
 	}
-	keys := []string{"url", "access_key_id", "access_key_secret", "index"}
+	keys := []string{"url", "access_key_id", "access_key_secret", "account_id", "index"}
 	for _, skip := range keys {
 		var b strings.Builder
 		b.WriteString("  vectors:\n    aliyun_oss_vectors:\n")

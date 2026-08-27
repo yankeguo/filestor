@@ -78,8 +78,8 @@ type BailianMultimodalEmbeddingConfig struct {
 
 // VectorsConfig holds vector-store providers. aliyun_oss_vectors is the
 // Aliyun OSS Vectors index the digest embeddings are written into; url
-// (bucket is in the host), access_key_id, access_key_secret, and index are
-// all required.
+// (bucket is in the host), access_key_id, access_key_secret, account_id,
+// and index are all required.
 type VectorsConfig struct {
 	AliyunOSSVectors AliyunOSSVectorsConfig `yaml:"aliyun_oss_vectors"`
 }
@@ -88,6 +88,7 @@ type AliyunOSSVectorsConfig struct {
 	URL             string `yaml:"url"`
 	AccessKeyID     string `yaml:"access_key_id"`
 	AccessKeySecret string `yaml:"access_key_secret"`
+	AccountID       string `yaml:"account_id"`
 	Index           string `yaml:"index"`
 }
 
@@ -181,6 +182,7 @@ func (c *Config) validate() error {
 	vec.URL = strings.TrimSpace(vec.URL)
 	vec.AccessKeyID = strings.TrimSpace(vec.AccessKeyID)
 	vec.AccessKeySecret = strings.TrimSpace(vec.AccessKeySecret)
+	vec.AccountID = strings.TrimSpace(vec.AccountID)
 	vec.Index = strings.TrimSpace(vec.Index)
 	if vec.URL == "" {
 		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.url is required")
@@ -190,6 +192,9 @@ func (c *Config) validate() error {
 	}
 	if vec.AccessKeySecret == "" {
 		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.access_key_secret is required")
+	}
+	if vec.AccountID == "" {
+		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.account_id is required")
 	}
 	if vec.Index == "" {
 		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.index is required")

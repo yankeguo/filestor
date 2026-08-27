@@ -12,6 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestVectorsResourcePath(t *testing.T) {
+	// OSS Vectors V4 signs an ACS ARN, not /<bucket>/. The 403 CanonicalRequest
+	// from a mismatched PutVectors is the encoded form of this path.
+	got := ossV4Escape(vectorsResourcePath("cn-hangzhou", "1234567890123456", "examplebucket"))
+	require.Equal(t, "/acs%3Aossvector%3Acn-hangzhou%3A1234567890123456%3Aexamplebucket/", got)
+}
+
 func TestParseVectorsEndpoint(t *testing.T) {
 	bucket, region, err := parseVectorsEndpoint("https://examplebucket-123456.cn-hangzhou.oss-vectors.aliyuncs.com")
 	require.NoError(t, err)
@@ -58,23 +65,25 @@ func TestOSSV4SignDocExample(t *testing.T) {
 }
 
 func TestPutVectors(t *testing.T) {
-	var gotMethod, gotQuery, gotAuth, gotContentType string
+	var gotMethod, gotQuery, gotAuth, gotContentType, gotDate string
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotQuery = r.URL.RawQuery
 		gotAuth = r.Header.Get("Authorization")
 		gotContentType = r.Header.Get("Content-Type")
+		gotDate = r.Header.Get("x-oss-date")
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
 
 	c := &vectorsClient{
-		cfg:    AliyunOSSVectorsConfig{URL: srv.URL, AccessKeyID: "ak", AccessKeySecret: "sk", Index: "idx"},
-		http:   srv.Client(),
-		bucket: "bkt",
-		region: "cn-hangzhou",
+		cfg:       AliyunOSSVectorsConfig{URL: srv.URL, AccessKeyID: "ak", AccessKeySecret: "sk", AccountID: "1234567890123456", Index: "idx"},
+		http:      srv.Client(),
+		bucket:    "bkt",
+		region:    "cn-hangzhou",
+		accountID: "1234567890123456",
 	}
 	meta := bundleMeta{ID: "uuid-1", Title: "weekly", Time: "2026-08-24T06:59"}
 	err := c.putVectors(context.Background(), "uuid-1", meta,
@@ -87,6 +96,21 @@ func TestPutVectors(t *testing.T) {
 	require.Equal(t, "application/json", gotContentType)
 	require.True(t, strings.HasPrefix(gotAuth, "OSS4-HMAC-SHA256 Credential=ak/"), gotAuth)
 	require.Contains(t, gotAuth, "/cn-hangzhou/oss/aliyun_v4_request")
+
+	// The Authorization must be the ACS ARN signature, not /<bucket>/.
+	signedAt, err := time.Parse("20060102T150405Z", gotDate)
+	require.NoError(t, err)
+	want, err := http.NewRequest(http.MethodPost, srv.URL+"/?putVectors", nil)
+	require.NoError(t, err)
+	want.Header.Set("Content-Type", "application/json")
+	ossV4Sign(want, vectorsResourcePath("cn-hangzhou", "1234567890123456", "bkt"), "cn-hangzhou", "ak", "sk", nil, signedAt)
+	require.Equal(t, want.Header.Get("Authorization"), gotAuth)
+
+	wrong, err := http.NewRequest(http.MethodPost, srv.URL+"/?putVectors", nil)
+	require.NoError(t, err)
+	wrong.Header.Set("Content-Type", "application/json")
+	ossV4Sign(wrong, "/bkt/", "cn-hangzhou", "ak", "sk", nil, signedAt)
+	require.NotEqual(t, wrong.Header.Get("Authorization"), gotAuth)
 
 	require.Equal(t, "idx", gotBody["indexName"])
 	vs, ok := gotBody["vectors"].([]any)
@@ -113,10 +137,11 @@ func TestPutVectorsError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	c := &vectorsClient{
-		cfg:    AliyunOSSVectorsConfig{URL: srv.URL, AccessKeyID: "ak", AccessKeySecret: "sk", Index: "idx"},
-		http:   srv.Client(),
-		bucket: "bkt",
-		region: "cn-hangzhou",
+		cfg:       AliyunOSSVectorsConfig{URL: srv.URL, AccessKeyID: "ak", AccessKeySecret: "sk", AccountID: "1234567890123456", Index: "idx"},
+		http:      srv.Client(),
+		bucket:    "bkt",
+		region:    "cn-hangzhou",
+		accountID: "1234567890123456",
 	}
 	err := c.putVectors(context.Background(), "uuid-1", bundleMeta{ID: "uuid-1", Time: "2026-08-24T06:59"},
 		[]string{"text-01.txt"}, [][]float32{{0.1}})
