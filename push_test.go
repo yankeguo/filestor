@@ -488,6 +488,9 @@ type rewriteTransport struct{ target *url.URL }
 
 func (t rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
+	if req.Host == "" {
+		req.Host = req.URL.Host
+	}
 	req.URL.Scheme = t.target.Scheme
 	req.URL.Host = t.target.Host
 	return http.DefaultTransport.RoundTrip(req)
@@ -517,10 +520,11 @@ func TestUploadPushEmbedsDigest(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	cfg.LLM.Embeddings.BailianMultimodalEmbedding = BailianMultimodalEmbeddingConfig{URL: emb.URL, Model: "m"}
 	cfg.LLM.Vectors.AliyunOSSVectors = AliyunOSSVectorsConfig{
-		URL:             "https://bkt.cn-hangzhou.oss-vectors.aliyuncs.com",
+		URL:             "https://cn-hangzhou.oss-vectors.aliyuncs.com",
+		Bucket:          "bkt",
+		AccountID:       "1234567890123456",
 		AccessKeyID:     "ak",
 		AccessKeySecret: "sk",
-		AccountID:       "1234567890123456",
 		Index:           "idx",
 	}
 	dir := cfg.Upload.Workspace
@@ -572,10 +576,11 @@ func TestUploadPushEmbedFailureSkipsIndex(t *testing.T) {
 	cfg := cfgWithWorkspace(t)
 	cfg.LLM.Embeddings.BailianMultimodalEmbedding = BailianMultimodalEmbeddingConfig{URL: emb.URL, Model: "m"}
 	cfg.LLM.Vectors.AliyunOSSVectors = AliyunOSSVectorsConfig{
-		URL:             "https://bkt.cn-hangzhou.oss-vectors.aliyuncs.com",
+		URL:             "https://cn-hangzhou.oss-vectors.aliyuncs.com",
+		Bucket:          "bkt",
+		AccountID:       "1234567890123456",
 		AccessKeyID:     "ak",
 		AccessKeySecret: "sk",
-		AccountID:       "1234567890123456",
 		Index:           "idx",
 	}
 	dir := cfg.Upload.Workspace
