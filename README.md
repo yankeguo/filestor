@@ -110,7 +110,7 @@ All of `admin.username`, `admin.password`, and `s3.{endpoint,region,bucket,acces
 | `GET` | `/bundle/{id}` | cookie | Dedicated bundle view by UUID (header from the in-memory index with `.meta.json` fallback, stats, media preview, file list); 404 when unknown |
 | `GET` | `/download?key=` | cookie | Sign a 5-minute GET URL (`Content-Disposition: attachment`) and 302 to the bucket |
 | `GET` | `/preview?key=` | cookie | Sign a 5-minute GET URL without attachment disposition (inline render) and 302 to the bucket |
-| `GET` | `/static/` | cookie | Embedded frontend assets (content-hashed names, immutable cache) |
+| `GET` | `/static/` | no | Embedded frontend assets (content-hashed names, immutable cache; public so the login page can load the stylesheet) |
 | `GET` | `/upload` | cookie | Local workspace page (EventSource `/upload/events`) |
 | `GET` | `/upload/events` | cookie | SSE: `snapshot`, `lock`, `files`, `state`, `progress`, `done`, `error`; lagging subscribers are dropped so EventSource reconnects to a fresh snapshot |
 | `GET` | `/upload/files` | cookie | JSON list of regular files in the workspace |

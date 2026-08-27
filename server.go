@@ -61,7 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /bundle/{id}", s.requireAuth(http.HandlerFunc(s.handleBundle)))
 	mux.Handle("GET /download", s.requireAuth(http.HandlerFunc(s.handleDownload)))
 	mux.Handle("GET /preview", s.requireAuth(http.HandlerFunc(s.handlePreview)))
-	mux.Handle("GET /static/", s.requireAuth(staticHandler()))
+	mux.Handle("GET /static/", staticHandler())
 	mux.Handle("GET /upload", s.requireAuth(http.HandlerFunc(s.handleUploadPage)))
 	mux.Handle("GET /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadList)))
 	mux.Handle("POST /upload/files", s.requireAuth(http.HandlerFunc(s.handleUploadAdd)))
