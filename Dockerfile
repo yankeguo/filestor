@@ -1,15 +1,20 @@
 FROM oven/bun:1 AS static
-WORKDIR /web
+# Mirror the repo layout: main.css's tailwind @source glob ("../../../*.go")
+# scans the top-level Go files for fileIcon's icon class names, so the Go
+# files must sit next to web/ — resolving past them (to /) walks the whole
+# container filesystem and the build hangs.
+WORKDIR /repo/web
 COPY web/package.json web/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY web/ ./
+COPY *.go /repo/
 RUN bun run build
 
 FROM golang:1.27 AS builder
 ENV CGO_ENABLED=0
 WORKDIR /go/src/app
 COPY . .
-COPY --from=static /web/dist web/dist
+COPY --from=static /repo/web/dist web/dist
 RUN go build -trimpath -ldflags="-s -w" -o /filestor
 
 FROM debian:bookworm-slim

@@ -1,7 +1,9 @@
 /* Tailwind v4 + Iconify lucide icons (build-time SVG masks, no runtime
    requests). Full import — preflight included — since Bootstrap is gone.
    Scans the views, the TS entries (dynamic DOM classes), and the top-level
-   Go files (icon names returned by fileIcon). */
+   Go files (icon names returned by fileIcon). The ../../*.go glob must
+   resolve to the repo root: the Dockerfile mirrors this layout — if the
+   glob escapes to a filesystem root, tailwind scans everything and hangs. */
 @import "tailwindcss";
 @plugin "@iconify/tailwind4";
 @source "../../view";
