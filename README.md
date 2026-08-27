@@ -79,14 +79,14 @@ upload:
 #         Authorization: Bearer REPLACE_ME
 #   vectors:
 #     aliyun_oss_vectors:
-#       url: https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com
+#       url: https://example-bucket-1234567890123456.cn-hangzhou.oss-vectors.aliyuncs.com
 #       access_key_id: REPLACE_ME
 #       access_key_secret: REPLACE_ME
-#       account_id: REPLACE_ME
+#       account_id: "1234567890123456"
 #       index: example-index
 ```
 
-All of `admin.username`, `admin.password`, and `s3.{endpoint,region,bucket,access_key_id,secret_access_key}` are required; `s3.force_path_style` is optional (needed by MinIO-style vendors). Any S3-compatible storage works — Aliyun OSS (use its S3-compatible endpoint `https://s3.oss-{region}.aliyuncs.com`), Qcloud COS (`https://cos.{region}.myqcloud.com`), AWS S3, MinIO, etc. `endpoint` may omit `https://`; it is added on load. `upload.workspace` defaults to `upload-workspace` (relative to the process working directory; in the container that is `/upload-workspace`). `llm.chat.openai.{url,model,effort,headers}` is the required OpenAI-compatible chat endpoint used by file analysis on `/upload`; `effort` is the model's reasoning effort, and `headers` is an optional map of extra HTTP headers (e.g. `Authorization`). `llm.embeddings.bailian_multimodal_embedding.{url,model,headers,dimensions}` is the required embeddings endpoint (no `chat` defaults); `dimensions` is optional. `llm.vectors.aliyun_oss_vectors.{url,access_key_id,access_key_secret,account_id,index}` is the required vector store (no `embeddings` defaults); `url` includes the bucket host in the shape `<bucket>.<region>.oss-vectors.aliyuncs.com`, and `account_id` is the Alibaba Cloud account that owns the vector bucket (used in the OSS Vectors V4 signature). Every `llm.*.url` must carry an `http(s)://` scheme. A missing LLM field fails startup. Do not commit `config.yaml`.
+All of `admin.username`, `admin.password`, and `s3.{endpoint,region,bucket,access_key_id,secret_access_key}` are required; `s3.force_path_style` is optional (needed by MinIO-style vendors). Any S3-compatible storage works — Aliyun OSS (use its S3-compatible endpoint `https://s3.oss-{region}.aliyuncs.com`), Qcloud COS (`https://cos.{region}.myqcloud.com`), AWS S3, MinIO, etc. `endpoint` may omit `https://`; it is added on load. `upload.workspace` defaults to `upload-workspace` (relative to the process working directory; in the container that is `/upload-workspace`). `llm.chat.openai.{url,model,effort,headers}` is the required OpenAI-compatible chat endpoint used by file analysis on `/upload`; `effort` is the model's reasoning effort, and `headers` is an optional map of extra HTTP headers (e.g. `Authorization`). `llm.embeddings.bailian_multimodal_embedding.{url,model,headers,dimensions}` is the required embeddings endpoint (no `chat` defaults); `dimensions` is optional. `llm.vectors.aliyun_oss_vectors.{url,access_key_id,access_key_secret,account_id,index}` is the required vector store (no `embeddings` defaults); `url` is the console Bucket 域名 in the shape `<bucket>-<account_id>.<region>.oss-vectors.aliyuncs.com`, and `account_id` is the Alibaba Cloud account UID (the digits after the last hyphen in that host, also used in the OSS Vectors V4 signature). Every `llm.*.url` must carry an `http(s)://` scheme. A missing LLM field fails startup. Do not commit `config.yaml`.
 
 ## Auth
 

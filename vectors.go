@@ -28,18 +28,31 @@ func vectorsResourcePath(region, accountID, bucket string) string {
 }
 
 // parseVectorsEndpoint splits the configured vectors URL into bucket and
-// region: the bucket lives in the host,
-// <bucket>.<region>[-internal].oss-vectors.aliyuncs.com.
-func parseVectorsEndpoint(rawURL string) (bucket, region string, err error) {
+// region. The host is the console Bucket 域名
+// <bucket>-<account_id>.<region>[-internal].oss-vectors.aliyuncs.com
+// (the Go SDK and PutVectors Host header) or the shorter
+// <bucket>.<region>[-internal].oss-vectors.aliyuncs.com. When the first
+// label ends with -<accountID>, that suffix is stripped so the signed ACS
+// resource uses the real bucket name, not bucket-uid.
+func parseVectorsEndpoint(rawURL, accountID string) (bucket, region string, err error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Hostname() == "" {
 		return "", "", fmt.Errorf("vectors: invalid url %q", rawURL)
 	}
 	labels := strings.Split(u.Hostname(), ".")
-	if len(labels) >= 3 && labels[2] == "oss-vectors" {
-		return labels[0], strings.TrimSuffix(labels[1], "-internal"), nil
+	if len(labels) < 3 || labels[2] != "oss-vectors" {
+		return "", "", fmt.Errorf("vectors: url host must be <bucket>[-<account_id>].<region>.oss-vectors.aliyuncs.com, got %q", u.Hostname())
 	}
-	return "", "", fmt.Errorf("vectors: url host must be <bucket>.<region>.oss-vectors.aliyuncs.com, got %q", u.Hostname())
+	bucket = labels[0]
+	if accountID != "" {
+		if suffix := "-" + accountID; strings.HasSuffix(bucket, suffix) {
+			bucket = strings.TrimSuffix(bucket, suffix)
+		}
+	}
+	if bucket == "" {
+		return "", "", fmt.Errorf("vectors: url host must be <bucket>[-<account_id>].<region>.oss-vectors.aliyuncs.com, got %q", u.Hostname())
+	}
+	return bucket, strings.TrimSuffix(labels[1], "-internal"), nil
 }
 
 // ossV4Escape URI-encodes a resource path segment-wise: unreserved characters
@@ -184,7 +197,7 @@ type vectorsClient struct {
 }
 
 func newVectorsClient(cfg AliyunOSSVectorsConfig) (*vectorsClient, error) {
-	bucket, region, err := parseVectorsEndpoint(cfg.URL)
+	bucket, region, err := parseVectorsEndpoint(cfg.URL, cfg.AccountID)
 	if err != nil {
 		return nil, err
 	}

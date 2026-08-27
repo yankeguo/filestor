@@ -20,14 +20,24 @@ func TestVectorsResourcePath(t *testing.T) {
 }
 
 func TestParseVectorsEndpoint(t *testing.T) {
-	bucket, region, err := parseVectorsEndpoint("https://examplebucket-123456.cn-hangzhou.oss-vectors.aliyuncs.com")
+	const uid = "1234567890123456"
+
+	// Console Bucket 域名 / PutVectors Host: <bucket>-<account_id>.<region>.oss-vectors…
+	bucket, region, err := parseVectorsEndpoint("https://examplebucket-"+uid+".cn-hangzhou.oss-vectors.aliyuncs.com", uid)
 	require.NoError(t, err)
-	require.Equal(t, "examplebucket-123456", bucket)
+	require.Equal(t, "examplebucket", bucket)
 	require.Equal(t, "cn-hangzhou", region)
 
-	bucket, region, err = parseVectorsEndpoint("https://bkt.cn-hangzhou-internal.oss-vectors.aliyuncs.com")
+	// Shorter host without the uid still yields the bucket name.
+	bucket, region, err = parseVectorsEndpoint("https://bkt.cn-hangzhou-internal.oss-vectors.aliyuncs.com", uid)
 	require.NoError(t, err)
 	require.Equal(t, "bkt", bucket)
+	require.Equal(t, "cn-hangzhou", region)
+
+	// A hyphenated bucket name is kept when it does not end in -<account_id>.
+	bucket, region, err = parseVectorsEndpoint("https://examplebucket-123456.cn-hangzhou.oss-vectors.aliyuncs.com", uid)
+	require.NoError(t, err)
+	require.Equal(t, "examplebucket-123456", bucket)
 	require.Equal(t, "cn-hangzhou", region)
 
 	for _, bad := range []string{
@@ -35,7 +45,7 @@ func TestParseVectorsEndpoint(t *testing.T) {
 		"https://bkt.oss-cn-hangzhou.aliyuncs.com",
 		"not a url",
 	} {
-		_, _, err := parseVectorsEndpoint(bad)
+		_, _, err := parseVectorsEndpoint(bad, uid)
 		require.Error(t, err, bad)
 	}
 }

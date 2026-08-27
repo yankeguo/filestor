@@ -77,9 +77,9 @@ type BailianMultimodalEmbeddingConfig struct {
 }
 
 // VectorsConfig holds vector-store providers. aliyun_oss_vectors is the
-// Aliyun OSS Vectors index the digest embeddings are written into; url
-// (bucket is in the host), access_key_id, access_key_secret, account_id,
-// and index are all required.
+// Aliyun OSS Vectors index the digest embeddings are written into; url is
+// the console Bucket 域名 (<bucket>-<account_id>.<region>.oss-vectors.aliyuncs.com),
+// and access_key_id, access_key_secret, account_id, and index are all required.
 type VectorsConfig struct {
 	AliyunOSSVectors AliyunOSSVectorsConfig `yaml:"aliyun_oss_vectors"`
 }
@@ -202,7 +202,7 @@ func (c *Config) validate() error {
 	if err := requireHTTPURL("llm.vectors.aliyun_oss_vectors.url", vec.URL); err != nil {
 		return err
 	}
-	if _, _, err := parseVectorsEndpoint(vec.URL); err != nil {
+	if _, _, err := parseVectorsEndpoint(vec.URL, vec.AccountID); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	return nil
