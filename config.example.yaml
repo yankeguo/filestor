@@ -22,8 +22,8 @@ upload:
 # headers. embeddings.bailian_multimodal_embedding vectorizes the digest
 # marks at push time; dimensions is optional. vectors.aliyun_oss_vectors is
 # the vector store the digest embeddings are written into; url is the
-# console Bucket 域名 (<bucket>-<account_id>.<region>.oss-vectors.aliyuncs.com),
-# and account_id is the Alibaba Cloud account UID in that host.
+# console 地域节点 (<region>.oss-vectors.aliyuncs.com), bucket is the vector
+# bucket name, and account_id is the Alibaba Cloud account UID.
 llm:
   chat:
     openai:
@@ -41,8 +41,9 @@ llm:
         Authorization: Bearer REPLACE_ME
   vectors:
     aliyun_oss_vectors:
-      url: https://example-bucket-1234567890123456.cn-hangzhou.oss-vectors.aliyuncs.com
+      url: https://cn-hangzhou.oss-vectors.aliyuncs.com
+      bucket: example-bucket
+      account_id: "1234567890123456"
       access_key_id: REPLACE_ME
       access_key_secret: REPLACE_ME
-      account_id: "1234567890123456"
       index: example-index

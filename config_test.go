@@ -35,10 +35,11 @@ const embBlock = `  embeddings:
 
 const vecBlock = `  vectors:
     aliyun_oss_vectors:
-      url: https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com
+      url: https://cn-hangzhou.oss-vectors.aliyuncs.com
+      bucket: example-bucket
+      account_id: 1234567890123456
       access_key_id: vec-ak
       access_key_secret: vec-sk
-      account_id: 1234567890123456
       index: vec-index
 `
 
@@ -143,16 +144,18 @@ func TestLoadConfigLLMVectors(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(yamlWithLLM(`llm:
 `+chatBlock+embBlock+`  vectors:
     aliyun_oss_vectors:
-      url: ' https://example-bucket-1234567890123456.cn-hangzhou.oss-vectors.aliyuncs.com '
+      url: ' https://cn-hangzhou.oss-vectors.aliyuncs.com '
+      bucket: ' example-bucket '
+      account_id: ' 1234567890123456 '
       access_key_id: ' vec-ak '
       access_key_secret: ' vec-sk '
-      account_id: ' 1234567890123456 '
       index: ' vec-index '
 `)), 0o644))
 	cfg, err := loadConfig(path)
 	require.NoError(t, err)
 	vec := cfg.LLM.Vectors.AliyunOSSVectors
-	require.Equal(t, "https://example-bucket-1234567890123456.cn-hangzhou.oss-vectors.aliyuncs.com", vec.URL)
+	require.Equal(t, "https://cn-hangzhou.oss-vectors.aliyuncs.com", vec.URL)
+	require.Equal(t, "example-bucket", vec.Bucket)
 	require.Equal(t, "vec-ak", vec.AccessKeyID)
 	require.Equal(t, "vec-sk", vec.AccessKeySecret)
 	require.Equal(t, "1234567890123456", vec.AccountID)
@@ -163,13 +166,14 @@ func TestLoadConfigLLMVectorsRequired(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	full := map[string]string{
-		"url":               "https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com",
+		"url":               "https://cn-hangzhou.oss-vectors.aliyuncs.com",
+		"bucket":            "example-bucket",
+		"account_id":        "1234567890123456",
 		"access_key_id":     "vec-ak",
 		"access_key_secret": "vec-sk",
-		"account_id":        "1234567890123456",
 		"index":             "vec-index",
 	}
-	keys := []string{"url", "access_key_id", "access_key_secret", "account_id", "index"}
+	keys := []string{"url", "bucket", "account_id", "access_key_id", "access_key_secret", "index"}
 	for _, skip := range keys {
 		var b strings.Builder
 		b.WriteString("  vectors:\n    aliyun_oss_vectors:\n")
@@ -190,8 +194,8 @@ func TestLoadConfigLLMVectorsHostShape(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	bad := strings.Replace(baseYAML(),
-		"https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com",
-		"https://example-bucket.oss-cn-hangzhou.aliyuncs.com", 1)
+		"https://cn-hangzhou.oss-vectors.aliyuncs.com",
+		"https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com", 1)
 	require.NoError(t, os.WriteFile(path, []byte(bad), 0o644))
 	_, err := loadConfig(path)
 	require.Error(t, err)

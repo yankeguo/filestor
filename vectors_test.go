@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -20,34 +21,33 @@ func TestVectorsResourcePath(t *testing.T) {
 }
 
 func TestParseVectorsEndpoint(t *testing.T) {
-	const uid = "1234567890123456"
-
-	// Console Bucket 域名 / PutVectors Host: <bucket>-<account_id>.<region>.oss-vectors…
-	bucket, region, err := parseVectorsEndpoint("https://examplebucket-"+uid+".cn-hangzhou.oss-vectors.aliyuncs.com", uid)
+	region, err := parseVectorsEndpoint("https://cn-hangzhou.oss-vectors.aliyuncs.com")
 	require.NoError(t, err)
-	require.Equal(t, "examplebucket", bucket)
 	require.Equal(t, "cn-hangzhou", region)
 
-	// Shorter host without the uid still yields the bucket name.
-	bucket, region, err = parseVectorsEndpoint("https://bkt.cn-hangzhou-internal.oss-vectors.aliyuncs.com", uid)
+	region, err = parseVectorsEndpoint("https://cn-hangzhou-internal.oss-vectors.aliyuncs.com")
 	require.NoError(t, err)
-	require.Equal(t, "bkt", bucket)
-	require.Equal(t, "cn-hangzhou", region)
-
-	// A hyphenated bucket name is kept when it does not end in -<account_id>.
-	bucket, region, err = parseVectorsEndpoint("https://examplebucket-123456.cn-hangzhou.oss-vectors.aliyuncs.com", uid)
-	require.NoError(t, err)
-	require.Equal(t, "examplebucket-123456", bucket)
 	require.Equal(t, "cn-hangzhou", region)
 
 	for _, bad := range []string{
 		"https://oss-cn-hangzhou.aliyuncs.com",
-		"https://bkt.oss-cn-hangzhou.aliyuncs.com",
+		"https://examplebucket.cn-hangzhou.oss-vectors.aliyuncs.com",
+		"https://examplebucket-123456.cn-hangzhou.oss-vectors.aliyuncs.com",
 		"not a url",
 	} {
-		_, _, err := parseVectorsEndpoint(bad, uid)
+		_, err := parseVectorsEndpoint(bad)
 		require.Error(t, err, bad)
 	}
+}
+
+func TestVectorsPutURL(t *testing.T) {
+	got, err := vectorsPutURL("https://cn-shenzhen.oss-vectors.aliyuncs.com", "vault", "1234567890123456")
+	require.NoError(t, err)
+	require.Equal(t, "https://vault-1234567890123456.cn-shenzhen.oss-vectors.aliyuncs.com/?putVectors", got)
+
+	got, err = vectorsPutURL("https://cn-hangzhou-internal.oss-vectors.aliyuncs.com", "bkt", "1234567890123456")
+	require.NoError(t, err)
+	require.Equal(t, "https://bkt-1234567890123456.cn-hangzhou-internal.oss-vectors.aliyuncs.com/?putVectors", got)
 }
 
 func TestOSSV4SignDocExample(t *testing.T) {
@@ -75,7 +75,7 @@ func TestOSSV4SignDocExample(t *testing.T) {
 }
 
 func TestPutVectors(t *testing.T) {
-	var gotMethod, gotQuery, gotAuth, gotContentType, gotDate string
+	var gotMethod, gotQuery, gotAuth, gotContentType, gotDate, gotHost string
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
@@ -83,20 +83,30 @@ func TestPutVectors(t *testing.T) {
 		gotAuth = r.Header.Get("Authorization")
 		gotContentType = r.Header.Get("Content-Type")
 		gotDate = r.Header.Get("x-oss-date")
+		gotHost = r.Host
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
 
+	target, err := url.Parse(srv.URL)
+	require.NoError(t, err)
 	c := &vectorsClient{
-		cfg:       AliyunOSSVectorsConfig{URL: srv.URL, AccessKeyID: "ak", AccessKeySecret: "sk", AccountID: "1234567890123456", Index: "idx"},
-		http:      srv.Client(),
+		cfg: AliyunOSSVectorsConfig{
+			URL:             "https://cn-hangzhou.oss-vectors.aliyuncs.com",
+			Bucket:          "bkt",
+			AccountID:       "1234567890123456",
+			AccessKeyID:     "ak",
+			AccessKeySecret: "sk",
+			Index:           "idx",
+		},
+		http:      &http.Client{Transport: rewriteTransport{target: target}},
 		bucket:    "bkt",
 		region:    "cn-hangzhou",
 		accountID: "1234567890123456",
 	}
 	meta := bundleMeta{ID: "uuid-1", Title: "weekly", Time: "2026-08-24T06:59"}
-	err := c.putVectors(context.Background(), "uuid-1", meta,
+	err = c.putVectors(context.Background(), "uuid-1", meta,
 		[]string{"image-01-pic.png", "text-01.txt"},
 		[][]float32{{0.1, 0.2}, {0.3, 0.4}})
 	require.NoError(t, err)
@@ -104,6 +114,7 @@ func TestPutVectors(t *testing.T) {
 	require.Equal(t, http.MethodPost, gotMethod)
 	require.Equal(t, "putVectors", gotQuery)
 	require.Equal(t, "application/json", gotContentType)
+	require.Equal(t, "bkt-1234567890123456.cn-hangzhou.oss-vectors.aliyuncs.com", gotHost)
 	require.True(t, strings.HasPrefix(gotAuth, "OSS4-HMAC-SHA256 Credential=ak/"), gotAuth)
 	require.Contains(t, gotAuth, "/cn-hangzhou/oss/aliyun_v4_request")
 
@@ -146,14 +157,23 @@ func TestPutVectorsError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"code":"AccessDenied"}`))
 	}))
 	t.Cleanup(srv.Close)
+	target, err := url.Parse(srv.URL)
+	require.NoError(t, err)
 	c := &vectorsClient{
-		cfg:       AliyunOSSVectorsConfig{URL: srv.URL, AccessKeyID: "ak", AccessKeySecret: "sk", AccountID: "1234567890123456", Index: "idx"},
-		http:      srv.Client(),
+		cfg: AliyunOSSVectorsConfig{
+			URL:             "https://cn-hangzhou.oss-vectors.aliyuncs.com",
+			Bucket:          "bkt",
+			AccountID:       "1234567890123456",
+			AccessKeyID:     "ak",
+			AccessKeySecret: "sk",
+			Index:           "idx",
+		},
+		http:      &http.Client{Transport: rewriteTransport{target: target}},
 		bucket:    "bkt",
 		region:    "cn-hangzhou",
 		accountID: "1234567890123456",
 	}
-	err := c.putVectors(context.Background(), "uuid-1", bundleMeta{ID: "uuid-1", Time: "2026-08-24T06:59"},
+	err = c.putVectors(context.Background(), "uuid-1", bundleMeta{ID: "uuid-1", Time: "2026-08-24T06:59"},
 		[]string{"text-01.txt"}, [][]float32{{0.1}})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "HTTP 403")

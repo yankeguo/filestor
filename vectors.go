@@ -27,32 +27,33 @@ func vectorsResourcePath(region, accountID, bucket string) string {
 	return "/acs:ossvector:" + region + ":" + accountID + ":" + bucket + "/"
 }
 
-// parseVectorsEndpoint splits the configured vectors URL into bucket and
-// region. The host is the console Bucket 域名
-// <bucket>-<account_id>.<region>[-internal].oss-vectors.aliyuncs.com
-// (the Go SDK and PutVectors Host header) or the shorter
-// <bucket>.<region>[-internal].oss-vectors.aliyuncs.com. When the first
-// label ends with -<accountID>, that suffix is stripped so the signed ACS
-// resource uses the real bucket name, not bucket-uid.
-func parseVectorsEndpoint(rawURL, accountID string) (bucket, region string, err error) {
+// parseVectorsEndpoint reads the region from the console 地域节点:
+// <region>[-internal].oss-vectors.aliyuncs.com. The bucket name and
+// account id are separate config fields; they are not taken from the URL.
+func parseVectorsEndpoint(rawURL string) (region string, err error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Hostname() == "" {
-		return "", "", fmt.Errorf("vectors: invalid url %q", rawURL)
+		return "", fmt.Errorf("vectors: invalid url %q", rawURL)
 	}
 	labels := strings.Split(u.Hostname(), ".")
-	if len(labels) < 3 || labels[2] != "oss-vectors" {
-		return "", "", fmt.Errorf("vectors: url host must be <bucket>[-<account_id>].<region>.oss-vectors.aliyuncs.com, got %q", u.Hostname())
+	if len(labels) < 3 || labels[1] != "oss-vectors" {
+		return "", fmt.Errorf("vectors: url host must be <region>.oss-vectors.aliyuncs.com, got %q", u.Hostname())
 	}
-	bucket = labels[0]
-	if accountID != "" {
-		if suffix := "-" + accountID; strings.HasSuffix(bucket, suffix) {
-			bucket = strings.TrimSuffix(bucket, suffix)
-		}
+	return strings.TrimSuffix(labels[0], "-internal"), nil
+}
+
+// vectorsPutURL is the PutVectors request URL: the Go SDK / console Bucket
+// 域名 Host <bucket>-<account_id>.<region-endpoint> with ?putVectors.
+func vectorsPutURL(endpoint, bucket, accountID string) (string, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Hostname() == "" {
+		return "", fmt.Errorf("vectors: invalid url %q", endpoint)
 	}
-	if bucket == "" {
-		return "", "", fmt.Errorf("vectors: url host must be <bucket>[-<account_id>].<region>.oss-vectors.aliyuncs.com, got %q", u.Hostname())
-	}
-	return bucket, strings.TrimSuffix(labels[1], "-internal"), nil
+	u.Host = bucket + "-" + accountID + "." + u.Host
+	u.Path = "/"
+	u.RawQuery = "putVectors"
+	u.Fragment = ""
+	return u.String(), nil
 }
 
 // ossV4Escape URI-encodes a resource path segment-wise: unreserved characters
@@ -197,11 +198,11 @@ type vectorsClient struct {
 }
 
 func newVectorsClient(cfg AliyunOSSVectorsConfig) (*vectorsClient, error) {
-	bucket, region, err := parseVectorsEndpoint(cfg.URL, cfg.AccountID)
+	region, err := parseVectorsEndpoint(cfg.URL)
 	if err != nil {
 		return nil, err
 	}
-	return &vectorsClient{cfg: cfg, http: vectorsHTTPClient, bucket: bucket, region: region, accountID: cfg.AccountID}, nil
+	return &vectorsClient{cfg: cfg, http: vectorsHTTPClient, bucket: cfg.Bucket, region: region, accountID: cfg.AccountID}, nil
 }
 
 type vectorItem struct {
@@ -236,7 +237,10 @@ func (c *vectorsClient) putVectors(ctx context.Context, bundleID string, meta bu
 		return err
 	}
 	log.Printf("vectors: writing %d vectors to index %s", len(items), c.cfg.Index)
-	endpoint := strings.TrimRight(c.cfg.URL, "/") + "/?putVectors"
+	endpoint, err := vectorsPutURL(c.cfg.URL, c.bucket, c.accountID)
+	if err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
