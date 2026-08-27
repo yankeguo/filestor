@@ -133,6 +133,7 @@ func TestLoadConfigLLMVectors(t *testing.T) {
       url: ' https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com '
       access_key_id: ' vec-ak '
       access_key_secret: ' vec-sk '
+      account_id: ' 1234567890123456 '
       index: ' vec-index '
 `), 0o644))
 	cfg, err := loadConfig(path)
@@ -141,6 +142,7 @@ func TestLoadConfigLLMVectors(t *testing.T) {
 	require.Equal(t, "https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com", vec.URL)
 	require.Equal(t, "vec-ak", vec.AccessKeyID)
 	require.Equal(t, "vec-sk", vec.AccessKeySecret)
+	require.Equal(t, "1234567890123456", vec.AccountID)
 	require.Equal(t, "vec-index", vec.Index)
 
 	// embeddings and vectors are independent: vectors gets no embeddings defaults.
@@ -156,6 +158,7 @@ func TestLoadConfigLLMVectors(t *testing.T) {
 	require.Empty(t, vec.URL)
 	require.Empty(t, vec.AccessKeyID)
 	require.Empty(t, vec.AccessKeySecret)
+	require.Empty(t, vec.AccountID)
 	require.Empty(t, vec.Index)
 }
 
@@ -166,9 +169,10 @@ func TestLoadConfigLLMVectorsRequiresTogether(t *testing.T) {
 		"url":               "https://example-bucket.cn-hangzhou.oss-vectors.aliyuncs.com",
 		"access_key_id":     "vec-ak",
 		"access_key_secret": "vec-sk",
+		"account_id":        "1234567890123456",
 		"index":             "vec-index",
 	}
-	keys := []string{"url", "access_key_id", "access_key_secret", "index"}
+	keys := []string{"url", "access_key_id", "access_key_secret", "account_id", "index"}
 	for _, skip := range keys {
 		var b strings.Builder
 		b.WriteString("llm:\n  vectors:\n    aliyun_oss_vectors:\n")
@@ -181,7 +185,7 @@ func TestLoadConfigLLMVectorsRequiresTogether(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte(baseYAML()+b.String()), 0o644))
 		_, err := loadConfig(path)
 		require.Error(t, err, skip)
-		require.Contains(t, err.Error(), "llm.vectors.aliyun_oss_vectors.url, llm.vectors.aliyun_oss_vectors.access_key_id, llm.vectors.aliyun_oss_vectors.access_key_secret, and llm.vectors.aliyun_oss_vectors.index")
+		require.Contains(t, err.Error(), "llm.vectors.aliyun_oss_vectors.url, llm.vectors.aliyun_oss_vectors.access_key_id, llm.vectors.aliyun_oss_vectors.access_key_secret, llm.vectors.aliyun_oss_vectors.account_id, and llm.vectors.aliyun_oss_vectors.index")
 	}
 }
 

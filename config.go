@@ -77,7 +77,7 @@ type BailianMultimodalEmbeddingConfig struct {
 
 // VectorsConfig holds vector-store providers. aliyun_oss_vectors is
 // independent of embeddings (no fallback); url (bucket is in the host),
-// access_key_id, access_key_secret, and index must be set together.
+// access_key_id, access_key_secret, account_id, and index must be set together.
 type VectorsConfig struct {
 	AliyunOSSVectors AliyunOSSVectorsConfig `yaml:"aliyun_oss_vectors"`
 }
@@ -86,6 +86,7 @@ type AliyunOSSVectorsConfig struct {
 	URL             string `yaml:"url"`
 	AccessKeyID     string `yaml:"access_key_id"`
 	AccessKeySecret string `yaml:"access_key_secret"`
+	AccountID       string `yaml:"account_id"`
 	Index           string `yaml:"index"`
 }
 
@@ -173,6 +174,7 @@ func (c *Config) validate() error {
 	vec.URL = strings.TrimSpace(vec.URL)
 	vec.AccessKeyID = strings.TrimSpace(vec.AccessKeyID)
 	vec.AccessKeySecret = strings.TrimSpace(vec.AccessKeySecret)
+	vec.AccountID = strings.TrimSpace(vec.AccountID)
 	vec.Index = strings.TrimSpace(vec.Index)
 	n := 0
 	if vec.URL != "" {
@@ -184,11 +186,14 @@ func (c *Config) validate() error {
 	if vec.AccessKeySecret != "" {
 		n++
 	}
+	if vec.AccountID != "" {
+		n++
+	}
 	if vec.Index != "" {
 		n++
 	}
-	if n != 0 && n != 4 {
-		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.url, llm.vectors.aliyun_oss_vectors.access_key_id, llm.vectors.aliyun_oss_vectors.access_key_secret, and llm.vectors.aliyun_oss_vectors.index must be set together")
+	if n != 0 && n != 5 {
+		return fmt.Errorf("config: llm.vectors.aliyun_oss_vectors.url, llm.vectors.aliyun_oss_vectors.access_key_id, llm.vectors.aliyun_oss_vectors.access_key_secret, llm.vectors.aliyun_oss_vectors.account_id, and llm.vectors.aliyun_oss_vectors.index must be set together")
 	}
 	if err := requireHTTPURL("llm.vectors.aliyun_oss_vectors.url", vec.URL); err != nil {
 		return err

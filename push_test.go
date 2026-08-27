@@ -520,6 +520,7 @@ func TestUploadPushEmbedsDigest(t *testing.T) {
 		URL:             "https://bkt.cn-hangzhou.oss-vectors.aliyuncs.com",
 		AccessKeyID:     "ak",
 		AccessKeySecret: "sk",
+		AccountID:       "1234567890123456",
 		Index:           "idx",
 	}
 	dir := cfg.Upload.Workspace
@@ -574,6 +575,7 @@ func TestUploadPushEmbedFailureSkipsIndex(t *testing.T) {
 		URL:             "https://bkt.cn-hangzhou.oss-vectors.aliyuncs.com",
 		AccessKeyID:     "ak",
 		AccessKeySecret: "sk",
+		AccountID:       "1234567890123456",
 		Index:           "idx",
 	}
 	dir := cfg.Upload.Workspace

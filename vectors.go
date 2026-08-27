@@ -20,6 +20,12 @@ import (
 // vectorsHTTPTimeout bounds one PutVectors request.
 const vectorsHTTPTimeout = 60 * time.Second
 
+// vectorsResourcePath is the unescaped OSS Vectors V4 canonical resource:
+// /acs:ossvector:{region}:{account_id}:{bucket}/
+func vectorsResourcePath(region, accountID, bucket string) string {
+	return "/acs:ossvector:" + region + ":" + accountID + ":" + bucket + "/"
+}
+
 // parseVectorsEndpoint splits the configured vectors URL into bucket and
 // region: the bucket lives in the host,
 // <bucket>.<region>[-internal].oss-vectors.aliyuncs.com.
@@ -90,8 +96,9 @@ func ossV4CanonicalQuery(rawQuery string) string {
 // ossV4Sign signs req with the OSS4-HMAC-SHA256 header signature: it sets the
 // x-oss-date, Date and x-oss-content-sha256 headers and finally the
 // Authorization header. resourcePath is the unescaped canonical resource
-// ("/<bucket>/" for the vectors API), additional lists extra signed header
-// names (empty for the vectors API). now is the signing time (UTC).
+// (vectorsResourcePath for the vectors API; "/<bucket>/<key>" for object
+// OSS). additional lists extra signed header names (empty for PutVectors).
+// now is the signing time (UTC).
 func ossV4Sign(req *http.Request, resourcePath, region, accessKeyID, accessKeySecret string, additional []string, now time.Time) {
 	now = now.UTC()
 	datetime := now.Format("20060102T150405Z")
@@ -168,10 +175,11 @@ var vectorsHTTPClient = &http.Client{Timeout: vectorsHTTPTimeout}
 
 // vectorsClient writes embedding vectors into an Aliyun OSS Vectors index.
 type vectorsClient struct {
-	cfg    AliyunOSSVectorsConfig
-	http   *http.Client
-	bucket string
-	region string
+	cfg       AliyunOSSVectorsConfig
+	http      *http.Client
+	bucket    string
+	region    string
+	accountID string
 }
 
 func newVectorsClient(cfg AliyunOSSVectorsConfig) (*vectorsClient, error) {
@@ -179,7 +187,7 @@ func newVectorsClient(cfg AliyunOSSVectorsConfig) (*vectorsClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &vectorsClient{cfg: cfg, http: vectorsHTTPClient, bucket: bucket, region: region}, nil
+	return &vectorsClient{cfg: cfg, http: vectorsHTTPClient, bucket: bucket, region: region, accountID: cfg.AccountID}, nil
 }
 
 type vectorItem struct {
@@ -219,7 +227,7 @@ func (c *vectorsClient) putVectors(ctx context.Context, bundleID string, meta bu
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	ossV4Sign(req, "/"+c.bucket+"/", c.region, c.cfg.AccessKeyID, c.cfg.AccessKeySecret, nil, time.Now())
+	ossV4Sign(req, vectorsResourcePath(c.region, c.accountID, c.bucket), c.region, c.cfg.AccessKeyID, c.cfg.AccessKeySecret, nil, time.Now())
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
