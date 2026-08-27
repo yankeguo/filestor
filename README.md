@@ -19,7 +19,7 @@ Cookie-authenticated browser for one S3-compatible bucket (Aliyun OSS, Qcloud CO
 ```bash
 cp config.example.yaml config.yaml
 # edit admin credentials and s3.*
-(cd static && bun install && bun run build)  # build the embedded frontend assets
+(cd web && bun install && bun run build)  # build the embedded frontend assets
 go run . -config config.yaml -listen :8080
 ```
 
@@ -45,7 +45,7 @@ The container image sets `FILESTOR_CONFIG=/config.yaml`.
 
 ## Frontend build
 
-Page JS lives in `static/` as a bun + TypeScript project: entries under `static/src/entries/` are bundled by `bun run build` (via `Bun.build`) into self-contained IIFE files in `static/dist/`, named `<entry>-<content-hash>.js`. `static/dist` is embedded into the binary (`go:embed`) and served at `GET /static/` with immutable caching; templates resolve the hashed name with the `{{jsAsset "entry"}}` helper, so only the entry name is referenced in HTML. During development use `bun run dev` (watch mode with inline sourcemaps); `bun run typecheck` runs `tsc --noEmit`. The Docker image builds the bundles in a bun stage.
+Page JS and CSS live in `web/` as a bun + TypeScript project: entries under `web/src/entries/` are bundled by `bun run build` (via `Bun.build`) into self-contained IIFE files in `web/dist/`, named `<entry>-<content-hash>.js`. The same build also compiles `web/src/entries/main.css` — Tailwind v4 utilities (`bun-plugin-tailwind`, no preflight so Bootstrap is untouched) scanned from the views in `web/view/` — into `main-<content-hash>.css`; `base.html` links it *before* Bootstrap so any class both frameworks define (`container`, `col-12`, …) keeps Bootstrap's meaning. `web/dist` is embedded into the binary (`go:embed`) and served at `GET /static/` with immutable caching; templates resolve the hashed names with the `{{jsAsset "entry"}}` / `{{cssAsset "main"}}` helpers, so only the entry name is referenced in HTML. During development use `bun run dev` (watch mode with inline sourcemaps; template-only class changes need a manual rebuild); `bun run typecheck` runs `tsc --noEmit`. The Docker image builds the bundles in a bun stage.
 
 ## Config
 

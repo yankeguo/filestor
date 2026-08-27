@@ -91,7 +91,7 @@ func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Content-Security-Policy", strings.Join([]string{
 			"default-src 'none'",
 			"script-src 'self' https://cdn.jsdelivr.net",
-			"style-src https://cdn.jsdelivr.net 'unsafe-inline'",
+			"style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'",
 			"font-src https://cdn.jsdelivr.net",
 			imgSrc,
 			mediaSrc,

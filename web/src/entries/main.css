@@ -1,0 +1,8 @@
+/* Tailwind v4 utilities, scanned from the Go templates. The theme is imported
+   by reference only (scale values are inlined as var() fallbacks) and preflight
+   is left out entirely so Bootstrap's reboot is not reset. base.html links this
+   stylesheet BEFORE Bootstrap so any class both frameworks define (container,
+   col-12, …) keeps Bootstrap's meaning; use utilities Bootstrap lacks. */
+@import "tailwindcss/theme" theme(reference);
+@import "tailwindcss/utilities";
+@source "../../view";

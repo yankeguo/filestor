@@ -39,8 +39,8 @@ go.work.sum
 # .vscode/
 
 # frontend build
-/static/node_modules
-/static/dist/*
-!/static/dist/.gitkeep
+/web/node_modules
+/web/dist/*
+!/web/dist/.gitkeep
 
 /.codegraph

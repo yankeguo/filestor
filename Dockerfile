@@ -1,15 +1,15 @@
 FROM oven/bun:1 AS static
-WORKDIR /static
-COPY static/package.json static/bun.lock ./
+WORKDIR /web
+COPY web/package.json web/bun.lock ./
 RUN bun install --frozen-lockfile
-COPY static/ ./
+COPY web/ ./
 RUN bun run build
 
 FROM golang:1.27 AS builder
 ENV CGO_ENABLED=0
 WORKDIR /go/src/app
 COPY . .
-COPY --from=static /static/dist static/dist
+COPY --from=static /web/dist web/dist
 RUN go build -trimpath -ldflags="-s -w" -o /filestor
 
 FROM debian:bookworm-slim
